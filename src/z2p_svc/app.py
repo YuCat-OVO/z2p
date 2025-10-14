@@ -26,6 +26,7 @@ def create_app() -> FastAPI:
 
     .. note::
        当LOG_LEVEL=DEBUG时会启用API文档（/docs和/redoc）和配置查看端点（/config）。
+       生命周期管理器需要在asgi.py中单独配置。
     """
     app = FastAPI(
         title="ZAI Proxy API",
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
         version="0",
         docs_url="/docs" if settings.verbose_logging else None,
         redoc_url="/redoc" if settings.verbose_logging else None,
+        lifespan=None,  # 生命周期管理器将在asgi.py中配置
     )
 
     app.add_middleware(

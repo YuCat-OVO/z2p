@@ -1,9 +1,17 @@
 """应用配置模块。
 
 本模块使用django-environ进行环境变量管理，提供应用运行所需的所有配置参数。
+支持多环境配置：
+- 开发环境：读取 .env.development
+- 生产环境：读取 .env.production
+- 默认：读取 .env
+
+环境通过 APP_ENV 环境变量指定，默认为 development。
 """
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Final
 
 import environ
@@ -27,8 +35,21 @@ class AppConfig:
     """
 
     def __init__(self):
-        """初始化配置，从环境变量读取设置。"""
+        """初始化配置，从环境变量读取设置。
+        
+        根据 APP_ENV 环境变量加载对应的 .env 文件：
+        - development: .env.development
+        - production: .env.production
+        - 默认: .env
+        """
+        # 获取当前环境，默认为 development
+        app_env = os.getenv("APP_ENV", "development")
+        
+        # 确定要加载的 .env 文件
+        env_file = self._get_env_file(app_env)
+        
         env = environ.Env(
+            APP_ENV=(str, "development"),
             HOST=(str, "0.0.0.0"),
             PORT=(int, 8001),
             WORKERS=(int, 1),
@@ -36,7 +57,16 @@ class AppConfig:
             PROXY_URL=(str, "https://chat.z.ai"),
         )
 
-        environ.Env.read_env()
+        # 加载指定的环境文件
+        if env_file.exists():
+            environ.Env.read_env(env_file)
+        else:
+            # 如果指定的环境文件不存在，尝试加载默认的 .env
+            default_env = Path(".env")
+            if default_env.exists():
+                environ.Env.read_env(default_env)
+        
+        self.app_env: str = env("APP_ENV")
 
         self.host: str = env("HOST")
         self.port: int = env("PORT")
@@ -94,6 +124,19 @@ class AppConfig:
             "glm-4.5V": "glm-4.5v",
             "glm-4.5": "0727-360B-API",
         }
+    
+    @staticmethod
+    def _get_env_file(app_env: str) -> Path:
+        """根据环境名称获取对应的 .env 文件路径。
+        
+        :param app_env: 环境名称（development/production）
+        :return: .env 文件的 Path 对象
+        """
+        env_files = {
+            "development": Path(".env.development"),
+            "production": Path(".env.production"),
+        }
+        return env_files.get(app_env, Path(".env"))
 
 
 @lru_cache
