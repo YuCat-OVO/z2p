@@ -1,10 +1,13 @@
 # 构建阶段
-FROM ghcr.io/astral-sh/uv:python3.13-alpine AS builder
+FROM docker.io/library/python:3.13-alpine AS builder
 
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+# 安装 uv
+RUN pip install --no-cache-dir uv
 
 # 创建虚拟环境
 RUN uv venv /opt/venv
