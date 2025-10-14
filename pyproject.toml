@@ -29,6 +29,12 @@ dev = [
 # build-backend = "uv_build"
 
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.coverage.run]
 branch = true
 parallel = true

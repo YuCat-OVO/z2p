@@ -8,27 +8,31 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
-    UV_PYTHON=python3.13
+    UV_PYTHON=python3.13 \
+    UV_PROJECT_ENVIRONMENT=/app
 
 # 从 uv 镜像复制 uv 可执行文件
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# 创建虚拟环境
-RUN uv venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# 复制依赖文件并安装
-COPY pyproject.toml uv.lock ./
+# 同步依赖（不安装项目本身）
+# 这一层会被缓存，直到 uv.lock 或 pyproject.toml 改变
 RUN --mount=type=cache,target=/root/.cache \
-    uv sync --frozen --no-dev --no-install-project
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync \
+        --frozen \
+        --no-dev \
+        --no-install-project
 
-# 复制应用代码 (不复制 main.py)
-COPY src/ ./src/
-COPY .env.example ./.env.production
-
-# 安装项目本身
+# 现在从 /src 安装应用程序（不包含依赖）
+# /src 不会被复制到运行时容器
+COPY . /src
+WORKDIR /src
 RUN --mount=type=cache,target=/root/.cache \
-    uv sync --frozen --no-dev --no-editable
+    uv sync \
+        --frozen \
+        --no-dev \
+        --no-editable
 
 ##########################################################################
 
@@ -39,13 +43,12 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     APP_ENV=production \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/app/bin:$PATH"
 
-# 从 build 阶段复制虚拟环境和应用代码
-COPY --from=build /opt/venv /opt/venv
+# 从 build 阶段复制预构建的 /app 目录到运行时容器
 COPY --from=build /app /app
 
 EXPOSE 8001
 
 # 使用 granian 运行 ASGI 应用程序
-CMD ["granian", "--interface", "asgi", "src.z2p_svc.asgi:app"]
+CMD ["granian", "--interface", "asgi", "z2p_svc.asgi:app"]
