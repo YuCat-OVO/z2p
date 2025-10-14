@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.9
 FROM python:3.13-alpine AS build
 
+SHELL ["sh", "-exc"]
+
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -13,6 +15,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # 从 uv 镜像复制 uv 可执行文件
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# 创建虚拟环境
+RUN uv venv /app
 
 # 同步依赖（不安装项目本身）
 # 这一层会被缓存，直到 uv.lock 或 pyproject.toml 改变
@@ -38,6 +43,8 @@ RUN --mount=type=cache,target=/root/.cache \
 
 FROM python:3.13-alpine AS runtime
 
+SHELL ["sh", "-exc"]
+
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -49,6 +56,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY --from=build /app /app
 
 EXPOSE 8001
+
+# 可选：运行冒烟测试验证应用可以被导入
+RUN <<EOT
+python -V
+python -Im site
+python -Ic 'import z2p_svc'
+EOT
 
 # 使用 granian 运行 ASGI 应用程序
 CMD ["granian", "--interface", "asgi", "z2p_svc.asgi:app"]
