@@ -8,7 +8,7 @@ on:
 
   push:
     branches:
-      - 'master'
+      - 'main'
     paths:
       - 'Dockerfile'
       - '.github/workflows/docker-publish.yml'
