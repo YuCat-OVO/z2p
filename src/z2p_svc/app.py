@@ -13,7 +13,7 @@ from .logger import configure_logging, get_logger
 from .routes import router
 
 settings = get_settings()
-configure_logging(settings.log_level, use_colors=settings.debug)
+configure_logging(settings.log_level, use_colors=settings.verbose_logging)
 logger = get_logger(__name__)
 
 
@@ -25,14 +25,14 @@ def create_app() -> FastAPI:
     :return: 配置完成的FastAPI应用实例
 
     .. note::
-       在调试模式下会启用API文档（/docs和/redoc）和配置查看端点（/config）。
+       当LOG_LEVEL=DEBUG时会启用API文档（/docs和/redoc）和配置查看端点（/config）。
     """
     app = FastAPI(
         title="ZAI Proxy API",
         description="ZAI Proxy API for accessing ZAI models",
         version="0",
-        docs_url="/docs" if settings.debug else None,
-        redoc_url="/redoc" if settings.debug else None,
+        docs_url="/docs" if settings.verbose_logging else None,
+        redoc_url="/redoc" if settings.verbose_logging else None,
     )
 
     app.add_middleware(
@@ -59,17 +59,16 @@ def create_app() -> FastAPI:
         :return: 包含错误信息的JSON响应
         """
         logger.error(
-            "unhandled_exception",
-            path=request.url.path,
-            method=request.method,
-            error=str(exc),
-            exc_info=True,
+            "Unhandled exception: path={}, method={}, error={}",
+            request.url.path,
+            request.method,
+            str(exc)
         )
         return JSONResponse(
             status_code=500,
             content={
                 "message": "An internal server error occurred.",
-                "detail": str(exc) if settings.debug else None,
+                "detail": str(exc) if settings.verbose_logging else None,
             },
         )
 
@@ -81,31 +80,31 @@ def create_app() -> FastAPI:
         """
         return {"message": "Hello z2p", "version": "0"}
 
-    if settings.debug:
+    if settings.verbose_logging:
 
         @app.get("/config")
         async def get_config() -> dict:
-            """获取当前配置信息（仅调试模式）。
+            """获取当前配置信息（仅DEBUG模式）。
 
             :return: 当前应用配置的字典表示
 
             .. warning::
-               此端点仅在调试模式下可用，生产环境不应暴露配置信息。
+               此端点仅在LOG_LEVEL=DEBUG时可用，生产环境不应暴露配置信息。
             """
             return {
                 "host": settings.host,
                 "port": settings.port,
-                "debug": settings.debug,
                 "workers": settings.workers,
                 "log_level": settings.log_level,
+                "verbose_logging": settings.verbose_logging,
                 "proxy_url": settings.proxy_url,
                 "allowed_models": settings.ALLOWED_MODELS,
             }
 
     logger.info(
-        "application_created",
-        debug=settings.debug,
-        log_level=settings.log_level,
+        "Application created: log_level={}, verbose_logging={}",
+        settings.log_level,
+        settings.verbose_logging,
     )
 
     return app

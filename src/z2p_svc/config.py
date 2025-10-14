@@ -17,9 +17,9 @@ class AppConfig:
 
     :ivar host: 服务器监听地址
     :ivar port: 服务器监听端口
-    :ivar debug: 是否开启调试模式
     :ivar workers: 工作进程数
-    :ivar log_level: 日志级别
+    :ivar log_level: 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
+    :ivar verbose_logging: 是否启用详细日志（当LOG_LEVEL=DEBUG时自动启用）
     :ivar proxy_url: 代理目标URL
     :ivar HEADERS: HTTP请求头常量
     :ivar ALLOWED_MODELS: 允许的模型列表
@@ -31,7 +31,6 @@ class AppConfig:
         env = environ.Env(
             HOST=(str, "0.0.0.0"),
             PORT=(int, 8001),
-            DEBUG=(bool, False),
             WORKERS=(int, 1),
             LOG_LEVEL=(str, "INFO"),
             PROXY_URL=(str, "https://chat.z.ai"),
@@ -41,20 +40,41 @@ class AppConfig:
 
         self.host: str = env("HOST")
         self.port: int = env("PORT")
-        self.debug: bool = env("DEBUG")
         self.workers: int = env("WORKERS")
         self.log_level: str = env("LOG_LEVEL")
         self.proxy_url: str = env("PROXY_URL")
+        
+        # 解析 protocol 和 base_url
+        if self.proxy_url.startswith("https://"):
+            self.protocol: str = "https:"
+            self.base_url: str = self.proxy_url[8:]
+        elif self.proxy_url.startswith("http://"):
+            self.protocol: str = "http:"
+            self.base_url: str = self.proxy_url[7:]
+        else:
+            self.protocol: str = "https:"
+            self.base_url: str = self.proxy_url
+        
+        # 当LOG_LEVEL为DEBUG时，自动启用详细日志和开发功能
+        self.verbose_logging: bool = self.log_level.upper() == "DEBUG"
 
+        # 基础请求头（用于API调用）
         self.HEADERS: Final[dict[str, str]] = {
             "Accept": "*/*",
-            "Accept-Language": "zh-CN",
+            "Accept-Language": "zh-CN,zh;q=0.9",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "Content-Type": "application/json",
-            "Origin": "https://chat.z.ai",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-            "X-FE-Version": "prod-fe-1.0.97",
+            "Origin": f"{self.protocol}//{self.base_url}",
+            "Pragma": "no-cache",
+            "Sec-Ch-Ua": '"Microsoft Edge";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+            "X-FE-Version": "prod-fe-1.0.98",
         }
 
         self.ALLOWED_MODELS: Final[list[dict[str, str]]] = [

@@ -76,10 +76,10 @@ def generate_signature(request_params: str, content: str) -> SignatureResult:
     ).hexdigest()
 
     logger.debug(
-        "signature_generated",
-        timestamp=timestamp_str,
-        time_window=time_window,
-        payload_length=len(payload),
+        "Signature generated: timestamp={}, time_window={}, payload_length={}",
+        timestamp_str,
+        time_window,
+        len(payload),
     )
 
     return {"signature": final_signature, "timestamp": timestamp_str}
