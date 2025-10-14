@@ -17,7 +17,7 @@ RUN uv sync --frozen --no-dev && \
 
 
 # 最终镜像
-FROM ghcr.io/astral-sh/uv:python3.13-alpine
+FROM docker.io/library/python:3.13-alpine
 
 WORKDIR /app
 
