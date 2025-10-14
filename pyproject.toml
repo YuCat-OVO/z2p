@@ -24,10 +24,9 @@ dev = [
     "pytest-cov>=7.0.0",
 ]
 
-# [build-system]
-# requires = ["uv_build"]
-# build-backend = "uv_build"
-
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

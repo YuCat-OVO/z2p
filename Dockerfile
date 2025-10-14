@@ -30,14 +30,13 @@ RUN --mount=type=cache,target=/root/.cache \
         --no-install-project
 
 # 现在从 /src 安装应用程序（不包含依赖）
-# /src 不会被复制到运行时容器
 COPY . /src
 WORKDIR /src
 RUN --mount=type=cache,target=/root/.cache \
-    uv sync \
-        --frozen \
-        --no-dev \
-        --no-editable
+    uv pip install \
+        --python /app/bin/python \
+        --no-deps \
+        .
 
 ##########################################################################
 
