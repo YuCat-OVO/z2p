@@ -1352,14 +1352,12 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "colorama" },
     { name = "coverage" },
     { name = "fastapi", extra = ["standard"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
-    { name = "rich" },
 ]
 
 [package.metadata]
@@ -1375,12 +1373,10 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "colorama", specifier = ">=0.4.6" },
     { name = "coverage", specifier = ">=7.10.7" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.119.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-benchmark", specifier = ">=5.1.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "rich", specifier = ">=14.2.0" },
 ]

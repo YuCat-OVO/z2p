@@ -16,14 +16,12 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "colorama>=0.4.6",
     "coverage>=7.10.7",
     "fastapi[standard]>=0.119.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-benchmark>=5.1.0",
     "pytest-cov>=7.0.0",
-    "rich>=14.2.0",
 ]
 
 # [build-system]
