@@ -54,6 +54,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # 从 build 阶段复制预构建的 /app 目录到运行时容器
 COPY --from=build /app /app
 
+# 复制 entrypoint 脚本
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 EXPOSE 8001
 
 # 可选：运行冒烟测试验证应用可以被导入
@@ -63,5 +67,6 @@ python -Im site
 python -Ic 'import z2p_svc'
 EOT
 
-# 使用 granian 运行 ASGI 应用程序
-CMD ["granian", "--interface", "asgi", "z2p_svc.asgi:app"]
+# 使用 entrypoint 脚本启动服务
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["granian"]

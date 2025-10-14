@@ -23,9 +23,9 @@ class AppConfig:
     通过环境变量自动加载配置，若环境变量未设置，则使用指定的默认值。
     使用 :func:`get_settings` 函数获取单例配置实例。
 
-    :ivar host: 服务器监听地址
-    :ivar port: 服务器监听端口
-    :ivar workers: 工作进程数
+    :ivar host: 服务器监听地址（仅用于信息展示，实际由granian通过环境变量读取）
+    :ivar port: 服务器监听端口（仅用于信息展示，实际由granian通过环境变量读取）
+    :ivar workers: 工作进程数（仅用于信息展示，实际由granian通过环境变量读取）
     :ivar log_level: 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
     :ivar verbose_logging: 是否启用详细日志（当LOG_LEVEL=DEBUG时自动启用）
     :ivar proxy_url: 代理目标URL
@@ -68,6 +68,9 @@ class AppConfig:
         
         self.app_env: str = env("APP_ENV")
 
+        # 注意：以下配置仅用于日志记录和调试信息展示
+        # granian服务器通过环境变量直接读取HOST、PORT、WORKERS配置
+        # 参见 Dockerfile 中的 CMD 命令
         self.host: str = env("HOST")
         self.port: int = env("PORT")
         self.workers: int = env("WORKERS")
