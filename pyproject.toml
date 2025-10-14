@@ -1,0 +1,40 @@
+[project]
+name = "z2p"
+version = "0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiohttp>=3.13.0",
+    "django-environ>=0.12.0",
+    "fastapi>=0.119.0",
+    "granian>=2.5.5",
+    "httpx>=0.28.1",
+    "stamina>=25.1.0",
+    "structlog>=25.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "colorama>=0.4.6",
+    "coverage>=7.10.7",
+    "fastapi[standard]>=0.119.0",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "rich>=14.2.0",
+]
+
+# [build-system]
+# requires = ["uv_build"]
+# build-backend = "uv_build"
+
+
+[tool.coverage.run]
+branch = true
+parallel = true
+source = ["z2p_svc", "tests"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+omit = ["src/**/asgi.py"]
