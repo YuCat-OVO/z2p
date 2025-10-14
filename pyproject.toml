@@ -10,8 +10,8 @@ dependencies = [
     "fastapi>=0.119.0",
     "granian>=2.5.5",
     "httpx>=0.28.1",
+    "loguru>=0.7.3",
     "stamina>=25.1.0",
-    "structlog>=25.4.0",
 ]
 
 [dependency-groups]
@@ -21,6 +21,8 @@ dev = [
     "fastapi[standard]>=0.119.0",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
+    "pytest-benchmark>=5.1.0",
+    "pytest-cov>=7.0.0",
     "rich>=14.2.0",
 ]
 

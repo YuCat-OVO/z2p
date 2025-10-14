@@ -1,4 +1,8 @@
-.env.develop
+# 环境变量文件（包含敏感信息，不应提交到版本控制）
+.env
+.env.development
+.env.production
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -221,6 +225,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+.benchmarks/
 
 # Translations
 *.mo
@@ -290,8 +295,8 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
-.env
+# Environments (已在文件开头定义，此处保留以兼容标准模板)
+# .env
 .venv
 env/
 venv/
