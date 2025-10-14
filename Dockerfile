@@ -8,8 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
-    UV_PYTHON=python3.13 \
-    UV_PROJECT_ENVIRONMENT=/app
+    UV_PYTHON=python3.13
 
 # 从 uv 镜像复制 uv 可执行文件
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
