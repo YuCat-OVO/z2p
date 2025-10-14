@@ -15,7 +15,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # 复制依赖文件并安装
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev && \
+    uv pip install .
 
 # 复制应用代码
 COPY main.py .
