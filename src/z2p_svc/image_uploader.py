@@ -1,6 +1,8 @@
 """图片上传模块。
 
 本模块支持从base64数据或URL上传图片到上游服务。
+
+⚠️ 注意：当前直接使用客户端提供的 access_token，不再使用认证服务获取的 cookies。
 """
 
 import base64
@@ -69,12 +71,12 @@ class ImageUploader:
         headers["Referer"] = f"{self.settings.protocol}//{self.settings.base_url}/c/{self.chat_id}"
         headers["Authorization"] = f"Bearer {self.access_token}"
         
-        # 将 cookies 附加到 Cookie 头中
-        if self.cookies:
-            cookie_str = "; ".join([f"{key}={value}" for key, value in self.cookies.items()])
-            headers["Cookie"] = cookie_str
-            if self.settings.verbose_logging:
-                logger.debug("Cookies attached to request: cookie_count={}, has_acw_tc={}", len(self.cookies), "acw_tc" in self.cookies)
+        # ⚠️ 暂时不使用 cookies，直接使用客户端提供的 token
+        # if self.cookies:
+        #     cookie_str = "; ".join([f"{key}={value}" for key, value in self.cookies.items()])
+        #     headers["Cookie"] = cookie_str
+        #     if self.settings.verbose_logging:
+        #         logger.debug("Cookies attached to request: cookie_count={}, has_acw_tc={}", len(self.cookies), "acw_tc" in self.cookies)
         
         return headers
 

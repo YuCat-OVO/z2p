@@ -266,12 +266,17 @@ async def prepare_request_data(
     # 生成 chat_id
     chat_id = str(uuid.uuid4())
     
-    # 获取用户信息（包含真实的 user_id、认证后的 token 和 cookies）
-    # 传递 chat_id 以便获取聊天页面的 cookies(特别是 acw_tc)
-    user_info = await get_user_info(access_token, chat_id)
-    user_id = user_info["user_id"]
-    auth_token = user_info["token"]  # 使用认证后的 token
-    cookies = user_info["cookies"]  # 获取从上游返回的 cookies(包括聊天页面的)
+    # ⚠️ 暂时屏蔽认证机制，直接使用客户端提供的 access_token
+    # 原认证流程：调用 get_user_info 获取 user_id、auth_token 和 cookies
+    # user_info = await get_user_info(access_token, chat_id)
+    # user_id = user_info["user_id"]
+    # auth_token = user_info["token"]
+    # cookies = user_info["cookies"]
+    
+    # 直接使用客户端提供的 token，使用固定的 user_id
+    user_id = "anonymous"  # 使用固定的用户ID
+    auth_token = access_token  # 直接使用客户端提供的 token
+    cookies = {}  # 不使用 cookies
     
     convert_dict = convert_messages(request.messages)
 
@@ -299,7 +304,7 @@ async def prepare_request_data(
                 zai_data["chat_id"],
             )
         
-        # 使用认证后的 token 和 cookies 创建 ImageUploader
+        # 使用客户端提供的 token 创建 ImageUploader（不使用 cookies）
         image_uploader = ImageUploader(auth_token, zai_data["chat_id"], cookies)
         uploaded_pic_ids = []
         
@@ -388,15 +393,15 @@ async def prepare_request_data(
     zai_data["signature_prompt"] = signature_content
 
     headers = settings.HEADERS.copy()
-    headers["Authorization"] = f"Bearer {auth_token}"  # 使用认证后的 token
+    headers["Authorization"] = f"Bearer {auth_token}"  # 直接使用客户端提供的 token
     headers["X-Signature"] = signature_data["signature"]
     
-    # 将 cookies 附加到 Cookie 头中
-    if cookies:
-        cookie_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
-        headers["Cookie"] = cookie_str
-        if settings.verbose_logging:
-            logger.debug("Cookies attached to chat request: cookie_count={}, has_acw_tc={}", len(cookies), "acw_tc" in cookies)
+    # ⚠️ 暂时不使用 cookies
+    # if cookies:
+    #     cookie_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
+    #     headers["Cookie"] = cookie_str
+    #     if settings.verbose_logging:
+    #         logger.debug("Cookies attached to chat request: cookie_count={}, has_acw_tc={}", len(cookies), "acw_tc" in cookies)
 
     if settings.verbose_logging:
         logger.debug(

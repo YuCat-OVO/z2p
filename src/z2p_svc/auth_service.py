@@ -1,6 +1,14 @@
 """用户认证服务模块。
 
 本模块负责处理用户认证和Token验证，每次请求都会调用认证接口获取最新的user_id。
+
+⚠️ 注意：此模块中的认证机制已被暂时屏蔽，当前服务直接使用客户端提供的 access_token 进行请求。
+以下功能暂时不需要：
+- fetch_acw_tc_cookie: 获取 acw_tc cookie
+- authenticate_with_cookies: 使用 cookie 进行认证
+- get_user_info: 获取用户信息和认证 token
+
+如需恢复认证机制，请在 chat_service.py 中的 prepare_request_data 函数中重新启用对 get_user_info 的调用。
 """
 
 import httpx
