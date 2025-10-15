@@ -93,9 +93,9 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
 
 
 async def authenticate_with_cookies(access_token: str, chat_id: str | None = None) -> tuple[str, str, str | None, dict[str, str]]:
-    """获取 acw_tc cookie 并使用它进行认证。
+    """通过cookie链式认证获取用户信息。
     
-    首先获取 acw_tc cookie，然后使用该 cookie 调用认证接口获取 Bearer token。
+    采用两步认证流程：先获取acw_tc cookie，再使用该cookie调用认证接口获取Bearer token。
     
     :param access_token: 客户端提供的访问令牌
     :param chat_id: 可选的聊天会话ID，用于构建Referer头
@@ -109,15 +109,18 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
     """
     cookies = await fetch_acw_tc_cookie(access_token)
     
+    # 构建认证请求头，包含访问令牌和Host信息
     headers = {
         **settings.HEADERS,
         "Authorization": f"Bearer {access_token}",
         "Host": settings.base_url,
     }
     
+    # 如果提供了chat_id，添加Referer头以模拟真实浏览器行为
     if chat_id:
         headers["Referer"] = f"{settings.proxy_url}/c/{chat_id}"
     
+    # 将获取的cookie附加到请求头中
     if cookies and "acw_tc" in cookies:
         cookie_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
         headers["Cookie"] = cookie_str
@@ -146,14 +149,13 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
                 response_cookies = dict(response.cookies)
                 cookies.update(response_cookies)
                 
-                token_preview = f"{auth_token}..." if auth_token and len(auth_token) > 12 else "***"
                 cookie_keys = list(cookies.keys())
                 has_acw_tc = "acw_tc" in cookies
                 logger.debug(
                     "Authentication successful: user_id={}, user_name={}, token={}, cookies={}, has_acw_tc={}",
                     user_id,
                     user_name,
-                    token_preview,
+                    auth_token,
                     cookie_keys,
                     has_acw_tc,
                 )
@@ -187,8 +189,7 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
 async def get_user_info(access_token: str, chat_id: str | None = None) -> UserInfo:
     """获取用户信息。
     
-    使用新的认证流程：首先获取 acw_tc cookie，然后使用该 cookie 调用认证接口获取 Bearer token。
-    确保数据始终是最新的，避免缓存失效问题。
+    采用无缓存的实时认证策略，每次调用都重新获取cookie和token，确保数据一致性。
     
     :param access_token: 客户端提供的访问令牌
     :param chat_id: 可选的聊天会话ID，用于构建Referer头
@@ -203,7 +204,7 @@ async def get_user_info(access_token: str, chat_id: str | None = None) -> UserIn
     
     .. note::
        此函数不使用缓存，每次都会请求认证接口，确保数据一致性。
-       使用新的认证流程确保 acw_tc cookie 和 Bearer token 的一致性。
+       采用cookie链式认证流程确保acw_tc cookie和Bearer token的一致性。
     """
     user_id, auth_token, user_name, cookies = await authenticate_with_cookies(access_token, chat_id)
     
@@ -214,14 +215,13 @@ async def get_user_info(access_token: str, chat_id: str | None = None) -> UserIn
         "cookies": cookies,
     }
     
-    token_preview = f"{auth_token}..." if auth_token and len(auth_token) > 12 else "***"
     cookie_keys = list(cookies.keys())
     has_acw_tc = "acw_tc" in cookies
     logger.debug(
         "User info fetched: user_id={}, user_name={}, token={}, cookies={}, has_acw_tc={}",
         user_id,
         user_name,
-        token_preview,
+        auth_token,
         cookie_keys,
         has_acw_tc,
     )

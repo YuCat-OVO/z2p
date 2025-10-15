@@ -78,11 +78,10 @@ def get_model_id(source_id: str, model_name: str) -> str:
     :param model_name: 处理后的模型名称
     :return: 用于API的模型ID
     """
-    # 检查是否有配置的映射（从上游ID到标准化ID）
     if source_id in settings.MODELS_MAPPING:
         return settings.MODELS_MAPPING[source_id]
     
-    # 找不到配置则生成智能ID（使用小写的模型名称）
+    # 将模型名称转换为小写并替换空格为连字符作为ID
     smart_id = model_name.lower().replace(" ", "-")
     return smart_id
 
@@ -104,6 +103,8 @@ async def fetch_models_from_upstream(access_token: str | None = None) -> dict[st
     
     models_url = f"{settings.proxy_url}/api/models"
     
+    logger.info("Fetching models from upstream: url={}", models_url)
+    
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.get(
@@ -114,32 +115,37 @@ async def fetch_models_from_upstream(access_token: str | None = None) -> dict[st
             
             if response.status_code == 200:
                 data = response.json()
-                logger.debug(
-                    "Models fetched from upstream: count={}",
-                    len(data.get("data", []))
+                model_count = len(data.get("data", []))
+                logger.info(
+                    "Models fetched successfully from upstream: total_count={}, url={}",
+                    model_count,
+                    models_url
                 )
                 return data
             else:
                 error_text = response.text
                 logger.error(
-                    "Failed to fetch models: status_code={}, response_text={}",
+                    "Failed to fetch models from upstream: status_code={}, url={}, response_text={}",
                     response.status_code,
+                    models_url,
                     error_text[:200],
                 )
                 raise Exception(f"获取模型列表失败 (HTTP {response.status_code}): {error_text[:100]}")
                 
     except httpx.RequestError as e:
         logger.error(
-            "Models request error: error_type={}, error={}",
+            "Models request error: error_type={}, error={}, url={}",
             type(e).__name__,
             str(e),
+            models_url,
         )
         raise Exception(f"模型列表请求错误: {str(e)}")
     except Exception as e:
         logger.error(
-            "Models unexpected error: error_type={}, error={}",
+            "Models unexpected error: error_type={}, error={}, url={}",
             type(e).__name__,
             str(e),
+            models_url,
         )
         raise
 
@@ -159,20 +165,19 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     """
     global _models_cache
     
-    # 如果使用缓存且缓存存在，直接返回
     if use_cache and _models_cache:
-        logger.debug("Returning cached models")
+        cached_count = len(_models_cache.get("data", []))
+        logger.info("Returning cached models: cached_count={}", cached_count)
         return _models_cache
     
-    # 从上游获取模型列表
+    logger.info("Fetching fresh models from upstream: use_cache={}", use_cache)
+    
     upstream_data = await fetch_models_from_upstream(access_token)
     
-    # 默认logo
     default_logo = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2030%2030%22%20style%3D%22background%3A%232D2D2D%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M15.47%207.1l-1.3%201.85c-.2.29-.54.47-.9.47h-7.1V7.09c0%20.01%209.31.01%209.31.01z%22%2F%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M24.3%207.1L13.14%2022.91H5.7l11.16-15.81z%22%2F%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M14.53%2022.91l1.31-1.86c.2-.29.54-.47.9-.47h7.09v2.33h-9.3z%22%2F%3E%3C%2Fsvg%3E"
     
     models = []
     for m in upstream_data.get("data", []):
-        # 跳过未激活的模型
         if not m.get("info", {}).get("is_active", True):
             continue
         
@@ -181,9 +186,25 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
         model_info = m.get("info", {})
         model_meta = model_info.get("meta", {})
         
-        # 获取处理后的模型名称和ID
         processed_name = get_model_name(source_id, source_name)
         processed_id = get_model_id(source_id, processed_name)
+        
+        # 建立客户端模型ID到上游模型ID的反向映射
+        if processed_id not in settings.REVERSE_MODELS_MAPPING:
+            settings.REVERSE_MODELS_MAPPING[processed_id] = source_id
+            logger.info(
+                "Added reverse mapping: processed_id={} -> source_id={}",
+                processed_id,
+                source_id
+            )
+        
+        logger.info(
+            "Model mapping: source_id={}, source_name={} -> processed_id={}, processed_name={}",
+            source_id,
+            source_name,
+            processed_id,
+            processed_name
+        )
         
         model_meta_processed = {
             "profile_image_url": default_logo,
@@ -217,12 +238,18 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
         
         capabilities = model_meta.get("capabilities", {})
         
+        # 为支持深度思考的模型生成禁用思考的变体
         if capabilities.get("think", False):
             nothinking_id = f"{processed_id}-nothinking"
             nothinking_name = f"{processed_name}-NOTHINKING"
             
             if nothinking_id not in settings.REVERSE_MODELS_MAPPING:
                 settings.REVERSE_MODELS_MAPPING[nothinking_id] = source_id
+                logger.info(
+                    "Added reverse mapping for variant: {} -> {}",
+                    nothinking_id,
+                    source_id
+                )
             
             models.append({
                 **base_model,
@@ -233,14 +260,27 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
                     "description": f"{model_meta_processed.get('description', '')} (禁用深度思考)".strip()
                 },
             })
-            logger.debug("Generated nothinking variant: {} -> {}", processed_id, nothinking_id)
+            logger.info(
+                "Generated nothinking variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}",
+                processed_id,
+                processed_name,
+                nothinking_id,
+                nothinking_name,
+                source_id
+            )
         
+        # 为支持网络搜索的模型生成搜索变体
         if capabilities.get("web_search", False):
             search_id = f"{processed_id}-search"
             search_name = f"{processed_name}-SEARCH"
             
             if search_id not in settings.REVERSE_MODELS_MAPPING:
                 settings.REVERSE_MODELS_MAPPING[search_id] = source_id
+                logger.info(
+                    "Added reverse mapping for variant: {} -> {}",
+                    search_id,
+                    source_id
+                )
             
             models.append({
                 **base_model,
@@ -251,13 +291,26 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
                     "description": f"{model_meta_processed.get('description', '')} (启用网络搜索)".strip()
                 },
             })
-            logger.debug("Generated search variant: {} -> {}", processed_id, search_id)
+            logger.info(
+                "Generated search variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}",
+                processed_id,
+                processed_name,
+                search_id,
+                search_name,
+                source_id
+            )
             
+            # 生成高级搜索变体（包含MCP服务器支持）
             advanced_search_id = f"{processed_id}-advanced-search"
             advanced_search_name = f"{processed_name}-ADVANCED-SEARCH"
             
             if advanced_search_id not in settings.REVERSE_MODELS_MAPPING:
                 settings.REVERSE_MODELS_MAPPING[advanced_search_id] = source_id
+                logger.info(
+                    "Added reverse mapping for variant: {} -> {}",
+                    advanced_search_id,
+                    source_id
+                )
             
             models.append({
                 **base_model,
@@ -268,7 +321,14 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
                     "description": f"{model_meta_processed.get('description', '')} (启用高级搜索)".strip()
                 },
             })
-            logger.debug("Generated advanced-search variant: {} -> {}", processed_id, advanced_search_id)
+            logger.info(
+                "Generated advanced-search variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}",
+                processed_id,
+                processed_name,
+                advanced_search_id,
+                advanced_search_name,
+                source_id
+            )
     
     result = {
         "object": "list",
@@ -277,12 +337,21 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     
     _models_cache = result
     
+    upstream_total = len(upstream_data.get("data", []))
+    active_count = len([m for m in upstream_data.get("data", []) if m.get("info", {}).get("is_active", True)])
+    variants_count = len(models)
+    reverse_mapping_count = len(settings.REVERSE_MODELS_MAPPING)
+    
     logger.info(
-        "Models processed: total={}, active={}, variants={}",
-        len(upstream_data.get("data", [])),
-        len([m for m in upstream_data.get("data", []) if m.get("info", {}).get("is_active", True)]),
-        len(models)
+        "Models processed successfully: upstream_total={}, active_models={}, generated_variants={}, reverse_mappings={}, cache_updated=True",
+        upstream_total,
+        active_count,
+        variants_count,
+        reverse_mapping_count
     )
+    
+    if settings.verbose_logging:
+        logger.debug("Current reverse mappings: {}", dict(settings.REVERSE_MODELS_MAPPING))
     
     return result
 

@@ -33,7 +33,6 @@ class FileUploader:
     :ivar cookies: 从上游获取的cookies字典
     """
     
-    # 支持的文件类型及其MIME类型映射
     MIME_TYPES = {
         # 图片格式
         'png': 'image/png',
@@ -73,13 +72,12 @@ class FileUploader:
         self.cookies = cookies or {}
         
         if self.settings.verbose_logging:
-            token_preview = f"{access_token}" if len(access_token) > 20 else "***"
             cookie_keys = list(self.cookies.keys())
             has_acw_tc = "acw_tc" in self.cookies
             logger.debug(
                 "File uploader initialized: token_length={}, token={}, chat_id={}, cookies={}, has_acw_tc={}",
                 len(access_token),
-                token_preview,
+                access_token,
                 self.chat_id,
                 cookie_keys,
                 has_acw_tc,
@@ -92,8 +90,9 @@ class FileUploader:
         """
         headers = {**self.settings.HEADERS}
         
+        # 移除不适用于文件上传的请求头
         headers.pop("Content-Type", None)
-        headers.pop("X-FE-Version",None)
+        headers.pop("X-FE-Version", None)
         
         headers["Referer"] = f"{self.settings.protocol}//{self.settings.base_url}/c/{self.chat_id}"
         headers["Authorization"] = f"Bearer {self.access_token}"
@@ -145,6 +144,7 @@ class FileUploader:
 
         mime_type = self._get_mime_type(filename)
 
+        # 将文件数据包装为类文件对象以便上传
         file_obj = io.BytesIO(file_data)
         files = {"file": (filename, file_obj, mime_type)}
         

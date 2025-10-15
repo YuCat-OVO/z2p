@@ -16,11 +16,11 @@ def configure_logging(log_level: str = "INFO", use_colors: bool = True) -> None:
 
     .. note::
        此函数应在应用启动时调用一次，配置全局日志行为。
-       开发环境使用彩色输出便于阅读，生产环境使用JSON格式便于日志收集和分析。
+       开发环境使用彩色输出便于阅读，生产环境使用纯文本格式便于日志收集和分析。
        
        日志级别说明：
-       - DEBUG: 输出详细的调试日志，包括请求准备、图片上传、响应流程等各个阶段
-       - INFO: 输出关键业务日志和API Key审计信息（脱敏显示）
+       - DEBUG: 输出详细的调试日志，包括请求准备、文件上传、响应流程等各个阶段
+       - INFO: 输出关键业务日志和访问令牌审计信息（脱敏显示）
        - WARNING及以上: 仅输出警告和错误信息
     """
     logger.remove()
@@ -30,7 +30,7 @@ def configure_logging(log_level: str = "INFO", use_colors: bool = True) -> None:
     if use_colors and sys.stderr.isatty():
         logger.add(
             sys.stderr,
-            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+            format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <5}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
             level=level,
             colorize=True,
             backtrace=True,
@@ -39,7 +39,7 @@ def configure_logging(log_level: str = "INFO", use_colors: bool = True) -> None:
     else:
         logger.add(
             sys.stderr,
-            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <5} | {name}:{function}:{line} - {message}",
             level=level,
             colorize=False,
             backtrace=True,
@@ -61,8 +61,8 @@ def get_logger(name: str | None = None):
         >>> logger.debug("Processing request: request_id={}, user_id={}", "123", "456")
         >>> logger.error("Request failed: {}", "Connection timeout")
     
-    Note:
-        loguru 使用 {} 占位符进行字符串格式化，而不是结构化的键值对。
-        例如：logger.info("User {} logged in", username) 而不是 logger.info("user_logged_in", username=username)
+    .. note::
+       loguru使用{}占位符进行字符串格式化，而不是结构化的键值对。
+       例如：logger.info("User {} logged in", username)
     """
     return logger
