@@ -13,9 +13,8 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
-from .auth_service import get_user_info
 from .config import get_settings
-from .image_uploader import ImageUploader
+from .file_uploader import FileUploader
 from .logger import get_logger
 from .models import ChatRequest, Message
 from .signature_generator import generate_signature
@@ -119,10 +118,10 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
     """转换消息格式为上游API所需格式。
 
     :param messages: 输入消息列表
-    :return: 包含转换后的消息、图片URL和签名内容的字典
+    :return: 包含转换后的消息、文件URL（包括图片和其他文件）和签名内容的字典
     """
     trans_messages = []
-    image_urls = []
+    file_urls = []
     last_user_message_text = ""
 
     for message in messages:
@@ -134,27 +133,26 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
             if role == "user":
                 last_user_message_text = content
         elif isinstance(content, list):
-            # 处理多模态消息（文本+图片+工具调用）
             text_content = ""
-            has_images = False
             dont_append = False
             new_message = {"role": role}
             
             for part in content:
                 part_type = part.get("type")
                 
-                # 处理文本内容
                 if part_type == "text":
                     text_content = part.get("text", "")
                 
-                # 处理图片
                 elif part_type == "image_url":
-                    image_url = part.get("image_url", {}).get("url", "")
-                    if image_url:
-                        image_urls.append(image_url)
-                        has_images = True
+                    file_url = part.get("image_url", {}).get("url", "")
+                    if file_url:
+                        file_urls.append(file_url)
                 
-                # Anthropic - 处理助理使用工具 (tool_use)
+                elif part_type == "file":
+                    file_url = part.get("url", "")
+                    if file_url:
+                        file_urls.append(file_url)
+                
                 elif part_type == "tool_use" and role == "assistant":
                     if new_message.get("tool_calls") is None:
                         new_message["tool_calls"] = []
@@ -169,11 +167,9 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
                     })
                     dont_append = True
                 
-                # Anthropic - 处理工具结果 (tool_result)
                 elif part_type == "tool_result":
                     tool_result_content = part.get("content", [])
                     
-                    # 如果工具结果内容是数组，提取所有 text 类型的内容
                     if isinstance(tool_result_content, list):
                         text_parts = []
                         for item in tool_result_content:
@@ -190,57 +186,70 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
                     })
                     dont_append = True
             
-            # 如果有文本内容，记录用于签名
             if text_content and role == "user":
                 last_user_message_text = text_content
             
-            # 添加消息（如果不是 tool_result 类型）
             if not dont_append and text_content:
                 trans_messages.append({
                     "role": role,
                     "content": text_content
                 })
             elif not dont_append and new_message.get("tool_calls"):
-                # 如果有 tool_calls，添加该消息
                 if text_content:
                     new_message["content"] = text_content
                 trans_messages.append(new_message)
 
     return {
         "messages": trans_messages,
-        "image_urls": image_urls,
+        "file_urls": file_urls,
         "last_user_message_text": last_user_message_text
     }
 
 
 def get_model_features(model: str, streaming: bool) -> dict[str, Any]:
     """获取模型特性配置。
+    
+    根据模型ID自动识别并配置相应的功能开关：
+    - nothinking: 禁用深度思考
+    - search: 启用网络搜索
+    - advanced-search: 启用高级搜索（包含MCP服务器）
 
     :param model: 模型名称
     :param streaming: 是否为流式请求
     :return: 包含特性和MCP服务器配置的字典
     """
     features = {
-        "image_generation": False,
         "web_search": False,
         "auto_web_search": False,
         "preview_mode": False,
         "flags": [],
-        "enable_thinking": streaming,
+        "enable_thinking": True,
     }
 
     mcp_servers = []
+    
+    model_lower = model.lower()
 
-    if model in ("glm-4.6-search", "glm-4.6-advanced-search"):
+    if "nothinking" in model_lower:
+        features["enable_thinking"] = False
+        if settings.verbose_logging:
+            logger.debug("Model feature detected: nothinking disabled for model={}", model)
+    elif not streaming:
+        features["enable_thinking"] = False
+        if settings.verbose_logging:
+            logger.debug("Thinking disabled for non-streaming request: model={}", model)
+
+    if "search" in model_lower:
         features["web_search"] = True
         features["auto_web_search"] = True
         features["preview_mode"] = True
-
-    if model == "glm-4.6-nothinking":
-        features["enable_thinking"] = False
-
-    if model == "glm-4.6-advanced-search":
-        mcp_servers = ["advanced-search"]
+        if settings.verbose_logging:
+            logger.debug("Model feature detected: search enabled for model={}", model)
+        
+        if "advanced" in model_lower:
+            mcp_servers = ["advanced-search"]
+            if settings.verbose_logging:
+                logger.debug("Model feature detected: advanced-search MCP server enabled for model={}", model)
 
     return {"features": features, "mcp_servers": mcp_servers}
 
@@ -263,81 +272,140 @@ async def prepare_request_data(
             len(request.messages),
         )
     
-    # 生成 chat_id
+    convert_dict = convert_messages(request.messages)
+    
     chat_id = str(uuid.uuid4())
     
-    # ⚠️ 暂时屏蔽认证机制，直接使用客户端提供的 access_token
-    # 原认证流程：调用 get_user_info 获取 user_id、auth_token 和 cookies
-    # user_info = await get_user_info(access_token, chat_id)
-    # user_id = user_info["user_id"]
-    # auth_token = user_info["token"]
-    # cookies = user_info["cookies"]
-    
-    # 直接使用客户端提供的 token，使用固定的 user_id
-    user_id = "anonymous"  # 使用固定的用户ID
-    auth_token = access_token  # 直接使用客户端提供的 token
-    cookies = {}  # 不使用 cookies
-    
-    convert_dict = convert_messages(request.messages)
+    user_id = "anonymous"
+    auth_token = access_token
+    cookies = {}
 
+    upstream_model_id = settings.REVERSE_MODELS_MAPPING.get(request.model, request.model)
+    
     zai_data = {
         "stream": True,
-        "model": settings.MODELS_MAPPING.get(request.model),
+        "model": upstream_model_id,
         "messages": convert_dict["messages"],
         "chat_id": chat_id,
         "id": str(uuid.uuid4()),
     }
 
-    # 用于签名的内容（最后一条用户消息的文本）
     signature_content = convert_dict.get("last_user_message_text", "")
     if not signature_content and zai_data["messages"]:
-        # 如果没有提取到，使用最后一条消息的内容
         last_msg = zai_data["messages"][-1]
         if isinstance(last_msg.get("content"), str):
             signature_content = last_msg["content"]
 
-    if convert_dict["image_urls"]:
-        if settings.verbose_logging:
-            logger.debug(
-                "Processing images: image_count={}, chat_id={}",
-                len(convert_dict["image_urls"]),
-                zai_data["chat_id"],
-            )
+    if convert_dict.get("file_urls"):
+        file_urls = convert_dict.get("file_urls", [])
+        logger.info(
+            "File upload processing started: file_count={}, chat_id={}, request_id={}",
+            len(file_urls),
+            zai_data["chat_id"],
+            zai_data["id"],
+        )
         
-        # 使用客户端提供的 token 创建 ImageUploader（不使用 cookies）
-        image_uploader = ImageUploader(auth_token, zai_data["chat_id"], cookies)
-        uploaded_pic_ids = []
+        file_uploader = FileUploader(auth_token, zai_data["chat_id"], cookies)
+        uploaded_file_ids = []
         
-        for idx, url in enumerate(convert_dict["image_urls"]):
+        for idx, url in enumerate(file_urls):
             try:
-                if settings.verbose_logging:
-                    url_type = "base64" if url.startswith("data:image/") else "http" if url.startswith("http") else "unknown"
-                    logger.debug(
-                        "Uploading image: index={}, url_type={}, url_preview={}",
-                        idx,
-                        url_type,
-                        url[:50],
-                    )
-                
-                if url.startswith("data:image/"):
-                    image_base64 = url.split("base64,")[-1]
-                    pic_id = await image_uploader.upload_base64_image(image_base64)
+                if url.startswith("data:"):
+                    url_type = "base64"
                 elif url.startswith("http"):
-                    pic_id = await image_uploader.upload_image_from_url(url)
+                    url_type = "http"
                 else:
-                    logger.warning("Unsupported image URL format: url={}", url)
+                    url_type = "unknown"
+                
+                logger.info(
+                    "File upload attempt: index={}/{}, url_type={}, url_preview={}, request_id={}",
+                    idx + 1,
+                    len(file_urls),
+                    url_type,
+                    url[:80] if len(url) > 80 else url,
+                    zai_data["id"],
+                )
+                
+                if url.startswith("data:"):
+                    if ";base64," in url:
+                        header, base64_data = url.split(";base64,", 1)
+                        mime_type = header.split(":", 1)[1] if ":" in header else ""
+                        
+                        file_ext = None
+                        if mime_type.startswith("image/"):
+                            file_ext = mime_type.split("/")[1]
+                        elif "pdf" in mime_type:
+                            file_ext = "pdf"
+                        elif "word" in mime_type or "msword" in mime_type:
+                            file_ext = "docx" if "openxmlformats" in mime_type else "doc"
+                        elif "sheet" in mime_type or "excel" in mime_type:
+                            file_ext = "xlsx" if "openxmlformats" in mime_type else "xls"
+                        elif "presentation" in mime_type or "powerpoint" in mime_type:
+                            file_ext = "pptx" if "openxmlformats" in mime_type else "ppt"
+                        elif "text/plain" in mime_type:
+                            file_ext = "txt"
+                        elif "text/markdown" in mime_type:
+                            file_ext = "md"
+                        elif "text/csv" in mime_type:
+                            file_ext = "csv"
+                        elif "python" in mime_type:
+                            file_ext = "py"
+                        
+                        file_id = await file_uploader.upload_base64_file(base64_data, file_type=file_ext)
+                    else:
+                        logger.warning("Unsupported data URL format (missing base64): url={}", url[:50])
+                        continue
+                
+                elif url.startswith("http"):
+                    file_id = await file_uploader.upload_file_from_url(url)
+                
+                else:
+                    logger.warning("Unsupported file URL format: url={}", url[:50])
                     continue
 
-                if pic_id:
-                    uploaded_pic_ids.append(pic_id)
-                    if settings.verbose_logging:
-                        logger.debug("Image uploaded successfully: index={}, pic_id={}", idx, pic_id)
+                if file_id:
+                    uploaded_file_ids.append(file_id)
+                    logger.info(
+                        "File uploaded successfully: index={}/{}, file_id={}, request_id={}",
+                        idx + 1,
+                        len(file_urls),
+                        file_id,
+                        zai_data["id"],
+                    )
+                else:
+                    logger.warning(
+                        "File upload returned no ID: index={}/{}, url_preview={}, request_id={}",
+                        idx + 1,
+                        len(file_urls),
+                        url[:80] if len(url) > 80 else url,
+                        zai_data["id"],
+                    )
             except Exception as e:
-                logger.error("Image upload failed: url={}, error={}", url[:50], str(e))
+                logger.error(
+                    "File upload failed: index={}/{}, url_preview={}, error={}, request_id={}",
+                    idx + 1,
+                    len(file_urls),
+                    url[:80] if len(url) > 80 else url,
+                    str(e),
+                    zai_data["id"],
+                )
 
-        # 如果有图片上传成功，需要重构最后一条用户消息为多模态格式
-        if uploaded_pic_ids and zai_data["messages"]:
-            # 找到最后一条用户消息
+        if uploaded_file_ids:
+            logger.info(
+                "File upload completed: total_files={}, successful={}, failed={}, request_id={}",
+                len(file_urls),
+                len(uploaded_file_ids),
+                len(file_urls) - len(uploaded_file_ids),
+                zai_data["id"],
+            )
+        else:
+            logger.warning(
+                "No files uploaded successfully: total_files={}, request_id={}",
+                len(file_urls),
+                zai_data["id"],
+            )
+        
+        if uploaded_file_ids and zai_data["messages"]:
             last_user_msg_idx = -1
             for i in range(len(zai_data["messages"]) - 1, -1, -1):
                 if zai_data["messages"][i].get("role") == "user":
@@ -348,30 +416,27 @@ async def prepare_request_data(
                 last_msg = zai_data["messages"][last_user_msg_idx]
                 text_content = last_msg.get("content", "")
                 
-                # 构建多模态内容数组
                 content_array = [
                     {"type": "text", "text": text_content}
                 ]
                 
-                # 添加所有图片
-                for pic_id in uploaded_pic_ids:
+                for file_id in uploaded_file_ids:
                     content_array.append({
                         "type": "image_url",
-                        "image_url": {"url": pic_id}
+                        "image_url": {"url": file_id}
                     })
                 
-                # 更新最后一条用户消息为多模态格式
                 zai_data["messages"][last_user_msg_idx] = {
                     "role": "user",
                     "content": content_array
                 }
                 
-                if settings.verbose_logging:
-                    logger.debug(
-                        "Reconstructed last user message with images: text_length={}, image_count={}",
-                        len(text_content),
-                        len(uploaded_pic_ids),
-                    )
+                logger.info(
+                    "Message reconstructed with files: text_length={}, file_count={}, request_id={}",
+                    len(text_content),
+                    len(uploaded_file_ids),
+                    zai_data["id"],
+                )
 
     features_dict = get_model_features(request.model, streaming)
     zai_data["features"] = features_dict["features"]
@@ -385,31 +450,23 @@ async def prepare_request_data(
     }
 
     request_params = f"requestId,{params['requestId']},timestamp,{params['timestamp']},user_id,{params['user_id']}"
-    # 使用提取的文本内容进行签名（不包含图片信息）
     signature_data = generate_signature(request_params, signature_content)
     params["signature_timestamp"] = str(signature_data["timestamp"])
     
-    # 添加 signature_prompt 字段
     zai_data["signature_prompt"] = signature_content
 
     headers = settings.HEADERS.copy()
-    headers["Authorization"] = f"Bearer {auth_token}"  # 直接使用客户端提供的 token
+    headers["Authorization"] = f"Bearer {auth_token}"
     headers["X-Signature"] = signature_data["signature"]
-    
-    # ⚠️ 暂时不使用 cookies
-    # if cookies:
-    #     cookie_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
-    #     headers["Cookie"] = cookie_str
-    #     if settings.verbose_logging:
-    #         logger.debug("Cookies attached to chat request: cookie_count={}, has_acw_tc={}", len(cookies), "acw_tc" in cookies)
 
     if settings.verbose_logging:
+        files_processed = bool(convert_dict.get("file_urls"))
         logger.debug(
-            "Prepare request data complete: chat_id={}, request_id={}, model_mapped={}, has_files={}, features={}",
+            "Prepare request data complete: chat_id={}, request_id={}, model_mapped={}, files_processed={}, features={}",
             zai_data["chat_id"],
             params["requestId"],
             zai_data["model"],
-            "files" in zai_data,
+            files_processed,
             zai_data["features"],
         )
 
@@ -431,7 +488,6 @@ async def process_streaming_response(
     """
     zai_data, params, headers = await prepare_request_data(request, access_token)
     
-    # 记录请求上下文信息
     request_id = params.get("requestId", "unknown")
     user_id = params.get("user_id", "unknown")
     timestamp = params.get("timestamp", "unknown")
@@ -455,13 +511,10 @@ async def process_streaming_response(
                 json=zai_data,
                 timeout=300,
             ) as response:
-                # 检查HTTP状态码
                 if response.status_code != 200:
-                    # 读取响应内容
                     error_content = await response.aread()
                     error_text = error_content.decode('utf-8', errors='ignore')
                     
-                    # 记录详细的错误日志
                     logger.error(
                         "Upstream HTTP error: status_code={}, response_text={}, request_id={}, user_id={}, timestamp={}, model={}, url={}",
                         response.status_code,
@@ -473,7 +526,6 @@ async def process_streaming_response(
                         str(response.url),
                     )
                     
-                    # 根据状态码返回相应的错误信息
                     if response.status_code == 400:
                         error_msg = "请求参数错误：请检查请求格式和参数"
                         error_type = "bad_request_error"
@@ -496,10 +548,8 @@ async def process_streaming_response(
                         error_msg = f"HTTP错误 {response.status_code}: {error_text[:100]}"
                         error_type = "http_error"
                     
-                    # 抛出异常而不是返回错误块
                     raise UpstreamAPIError(response.status_code, error_msg, error_type)
                 
-                # 正常处理200响应
                 if settings.verbose_logging:
                     logger.debug(
                         "Streaming response received: request_id={}, status_code={}",
@@ -544,7 +594,6 @@ async def process_streaming_response(
 
                     elif phase == "tool_call":
                         content = data.get("delta_content") or data.get("edit_content", "")
-                        # 清理 glm_block 标签
                         content = re.sub(r'\n*<glm_block[^>]*>{"type": "mcp", "data": {"metadata": {', '{', content)
                         content = re.sub(r'", "result": "".*</glm_block>', '', content)
                         chunk_count += 1
@@ -566,10 +615,8 @@ async def process_streaming_response(
                         break
 
         except UpstreamAPIError:
-            # 重新抛出上游API错误，让路由层处理
             raise
         except httpx.HTTPStatusError as e:
-            # 这个异常不应该被触发，因为我们已经手动检查了状态码
             logger.error(
                 "Unexpected HTTP status error: status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
                 e.response.status_code,
@@ -630,7 +677,6 @@ async def process_non_streaming_response(
     full_response = ""
     usage = {}
     
-    # 记录请求上下文信息
     request_id = params.get("requestId", "unknown")
     user_id = params.get("user_id", "unknown")
     timestamp = params.get("timestamp", "unknown")
@@ -654,12 +700,10 @@ async def process_non_streaming_response(
                 json=zai_data,
                 timeout=300,
             ) as response:
-                # 检查HTTP状态码
                 if response.status_code != 200:
                     error_content = await response.aread()
                     error_text = error_content.decode('utf-8', errors='ignore')
                     
-                    # 记录详细的错误日志
                     logger.error(
                         "Upstream HTTP error (non-streaming): status_code={}, response_text={}, request_id={}, user_id={}, timestamp={}, model={}, url={}",
                         response.status_code,
@@ -671,7 +715,6 @@ async def process_non_streaming_response(
                         str(response.url),
                     )
                     
-                    # 根据状态码返回相应的错误信息
                     if response.status_code == 400:
                         error_msg = "请求参数错误：请检查请求格式和参数"
                         error_type = "bad_request_error"
@@ -694,10 +737,8 @@ async def process_non_streaming_response(
                         error_msg = f"HTTP错误 {response.status_code}: {error_text[:100]}"
                         error_type = "http_error"
                     
-                    # 抛出异常而不是返回错误对象
                     raise UpstreamAPIError(response.status_code, error_msg, error_type)
                 
-                # 正常处理200响应
                 if settings.verbose_logging:
                     logger.debug(
                         "Non-streaming response received: request_id={}, status_code={}",
@@ -737,10 +778,8 @@ async def process_non_streaming_response(
                             )
 
         except UpstreamAPIError:
-            # 重新抛出上游API错误，让路由层处理
             raise
         except httpx.HTTPStatusError as e:
-            # 这个异常不应该被触发，因为我们已经手动检查了状态码
             logger.error(
                 "Unexpected HTTP status error (non-streaming): status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
                 e.response.status_code,

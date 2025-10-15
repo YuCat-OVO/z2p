@@ -61,7 +61,6 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
                 timeout=10.0,
             )
             
-            # 从响应中提取 cookies
             cookies = dict(response.cookies)
             
             has_acw_tc = "acw_tc" in cookies
@@ -108,21 +107,17 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
         >>> print(cookies.get("acw_tc"))
         >>> print(auth_token)
     """
-    # 首先获取 acw_tc cookie
     cookies = await fetch_acw_tc_cookie(access_token)
     
-    # 构建请求头，优先使用config中的值，补充缺失的头信息
     headers = {
         **settings.HEADERS,
         "Authorization": f"Bearer {access_token}",
         "Host": settings.base_url,
     }
     
-    # 如果提供了 chat_id，则在 Referer 中使用它
     if chat_id:
         headers["Referer"] = f"{settings.proxy_url}/c/{chat_id}"
     
-    # 将 acw_tc cookie 附加到 Cookie 头中
     if cookies and "acw_tc" in cookies:
         cookie_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
         headers["Cookie"] = cookie_str
@@ -148,13 +143,10 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
                     logger.error("Auth response missing user_id: response_data={}", data)
                     raise Exception("认证响应中缺少 user_id")
                 
-                # 从响应中提取额外的 cookies
                 response_cookies = dict(response.cookies)
-                # 合并 cookies，保留原有的 acw_tc
                 cookies.update(response_cookies)
                 
                 token_preview = f"{auth_token}..." if auth_token and len(auth_token) > 12 else "***"
-                # 记录 cookies 信息(特别关注 acw_tc)
                 cookie_keys = list(cookies.keys())
                 has_acw_tc = "acw_tc" in cookies
                 logger.debug(
@@ -213,10 +205,8 @@ async def get_user_info(access_token: str, chat_id: str | None = None) -> UserIn
        此函数不使用缓存，每次都会请求认证接口，确保数据一致性。
        使用新的认证流程确保 acw_tc cookie 和 Bearer token 的一致性。
     """
-    # 使用新的认证流程获取 user_id、token、name 和 cookies
     user_id, auth_token, user_name, cookies = await authenticate_with_cookies(access_token, chat_id)
     
-    # 构建用户信息
     user_info: UserInfo = {
         "user_id": user_id,
         "token": auth_token,
@@ -225,7 +215,6 @@ async def get_user_info(access_token: str, chat_id: str | None = None) -> UserIn
     }
     
     token_preview = f"{auth_token}..." if auth_token and len(auth_token) > 12 else "***"
-    # 记录 cookies 信息(特别关注 acw_tc)
     cookie_keys = list(cookies.keys())
     has_acw_tc = "acw_tc" in cookies
     logger.debug(

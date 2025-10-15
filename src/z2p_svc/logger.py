@@ -23,14 +23,11 @@ def configure_logging(log_level: str = "INFO", use_colors: bool = True) -> None:
        - INFO: 输出关键业务日志和API Key审计信息（脱敏显示）
        - WARNING及以上: 仅输出警告和错误信息
     """
-    # 移除默认的handler
     logger.remove()
     
-    # 设置日志级别
     level = log_level.upper()
     
     if use_colors and sys.stderr.isatty():
-        # 开发环境：使用彩色控制台输出，类似loguru的美观格式
         logger.add(
             sys.stderr,
             format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
@@ -40,7 +37,6 @@ def configure_logging(log_level: str = "INFO", use_colors: bool = True) -> None:
             diagnose=True,
         )
     else:
-        # 生产环境：使用结构化格式便于日志收集
         logger.add(
             sys.stderr,
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
@@ -69,5 +65,4 @@ def get_logger(name: str | None = None):
         loguru 使用 {} 占位符进行字符串格式化，而不是结构化的键值对。
         例如：logger.info("User {} logged in", username) 而不是 logger.info("user_logged_in", username=username)
     """
-    # loguru 使用全局单例，直接返回
     return logger

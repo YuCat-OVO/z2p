@@ -27,7 +27,6 @@ from .logger import get_logger
 logger = get_logger(__name__)
 settings = get_settings()
 
-# 全局初始化标志，确保初始化逻辑只运行一次
 _initialized = False
 _init_lock = asyncio.Lock()
 
@@ -51,11 +50,6 @@ async def initialize_services() -> None:
         
         logger.info("Initializing application services...")
         
-        # 在这里添加初始化逻辑
-        # 例如：
-        # - await init_database_pool()
-        # - await init_redis_connection()
-        # - await load_ml_models()
         
         logger.info(
             "Application services initialized successfully: env={}, host={}, port={}",
@@ -83,10 +77,6 @@ async def shutdown_services() -> None:
     
     logger.info("Shutting down application services...")
     
-    # 在这里添加清理逻辑
-    # 例如：
-    # - await close_database_pool()
-    # - await close_redis_connection()
     
     logger.info("Application services shut down successfully")
     _initialized = False
@@ -102,19 +92,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     :param app: FastAPI应用实例
     :yield: None
     """
-    # 启动时执行
     await initialize_services()
     
     yield
     
-    # 关闭时执行
     await shutdown_services()
 
 
-# 导入 create_app 函数
 from .app import create_app as _create_app
 
-# 创建应用实例并配置生命周期管理器
 def create_app_with_lifespan() -> FastAPI:
     """创建带有生命周期管理的 FastAPI 应用实例。
     
@@ -125,29 +111,24 @@ def create_app_with_lifespan() -> FastAPI:
     """
     from fastapi import FastAPI
     
-    # 获取基础应用配置
     base_app = _create_app()
     
-    # 创建新应用实例并配置生命周期
     app = FastAPI(
         title=base_app.title,
         description=base_app.description,
         version=base_app.version,
         docs_url=base_app.docs_url,
         redoc_url=base_app.redoc_url,
-        lifespan=lifespan,  # 注入生命周期管理器
+        lifespan=lifespan,
     )
     
-    # 复制中间件
     app.user_middleware = base_app.user_middleware.copy()
     
-    # 复制路由
     app.router = base_app.router
     
     return app
 
 
-# 创建应用实例
 app = create_app_with_lifespan()
 
 __all__ = ["app"]

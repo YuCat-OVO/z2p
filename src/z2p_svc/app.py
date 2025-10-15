@@ -17,16 +17,17 @@ configure_logging(settings.log_level, use_colors=settings.verbose_logging)
 logger = get_logger(__name__)
 
 
-def create_app() -> FastAPI:
+def create_app(lifespan=None) -> FastAPI:
     """创建并配置FastAPI应用实例。
 
     配置包括CORS中间件、可信主机中间件、API路由和全局异常处理。
 
+    :param lifespan: 可选的生命周期管理器
     :return: 配置完成的FastAPI应用实例
 
     .. note::
        当LOG_LEVEL=DEBUG时会启用API文档（/docs和/redoc）和配置查看端点（/config）。
-       生命周期管理器需要在asgi.py中单独配置。
+       生命周期管理器可以通过参数传入。
     """
     app = FastAPI(
         title="ZAI Proxy API",
@@ -34,7 +35,7 @@ def create_app() -> FastAPI:
         version="0",
         docs_url="/docs" if settings.verbose_logging else None,
         redoc_url="/redoc" if settings.verbose_logging else None,
-        lifespan=None,  # 生命周期管理器将在asgi.py中配置
+        lifespan=lifespan,
     )
 
     app.add_middleware(
