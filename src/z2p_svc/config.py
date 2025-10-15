@@ -27,7 +27,7 @@ class AppConfig:
     :ivar port: 服务器监听端口（仅用于信息展示，实际由granian通过环境变量读取）
     :ivar workers: 工作进程数（仅用于信息展示，实际由granian通过环境变量读取）
     :ivar log_level: 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
-    :ivar verbose_logging: 是否启用详细日志（当LOG_LEVEL=DEBUG时自动启用）
+    :ivar verbose_logging: 是否启用详细日志模式（包含完整时间戳、行号、backtrace和diagnose）
     :ivar proxy_url: 代理目标URL
     :ivar HEADERS: HTTP请求头常量
     :ivar ALLOWED_MODELS: 允许的模型列表
@@ -52,6 +52,7 @@ class AppConfig:
             PORT=(int, 8001),
             WORKERS=(int, 1),
             LOG_LEVEL=(str, "INFO"),
+            VERBOSE_LOGGING=(bool, False),
             PROXY_URL=(str, "https://chat.z.ai"),
         )
 
@@ -68,6 +69,7 @@ class AppConfig:
         self.port: int = env("PORT")
         self.workers: int = env("WORKERS")
         self.log_level: str = env("LOG_LEVEL")
+        self.verbose_logging: bool = env("VERBOSE_LOGGING")
         self.proxy_url: str = env("PROXY_URL")
         
         if self.proxy_url.startswith("https://"):
@@ -80,7 +82,9 @@ class AppConfig:
             self.protocol: str = "https:"
             self.base_url: str = self.proxy_url
         
-        self.verbose_logging: bool = self.log_level.upper() == "DEBUG"
+        # 如果日志级别为DEBUG，自动启用详细日志（除非明确设置为False）
+        if self.log_level.upper() == "DEBUG" and not env.bool("VERBOSE_LOGGING", default=None):
+            self.verbose_logging = True
 
         self.HEADERS: Final[dict[str, str]] = {
             "Accept": "*/*",
