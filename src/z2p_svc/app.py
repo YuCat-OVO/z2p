@@ -13,7 +13,7 @@ from .logger import configure_logging, get_logger
 from .routes import router
 
 settings = get_settings()
-configure_logging(settings.log_level, use_colors=settings.verbose_logging)
+configure_logging(settings.log_level, use_colors=True, verbose=settings.verbose_logging)
 logger = get_logger(__name__)
 
 
@@ -26,7 +26,7 @@ def create_app(lifespan=None) -> FastAPI:
     :return: 配置完成的FastAPI应用实例
 
     .. note::
-       当LOG_LEVEL=DEBUG时会启用API文档（/docs和/redoc）和配置查看端点（/config）。
+       当VERBOSE_LOGGING=true时会启用API文档（/docs和/redoc）和配置查看端点（/config）。
        生命周期管理器可以通过参数传入。
     """
     app = FastAPI(
@@ -92,7 +92,7 @@ def create_app(lifespan=None) -> FastAPI:
             :return: 当前应用配置的字典表示
 
             .. warning::
-               此端点仅在LOG_LEVEL=DEBUG时可用，生产环境不应暴露配置信息。
+               此端点仅在VERBOSE_LOGGING=true时可用，生产环境不应暴露配置信息。
             """
             return {
                 "host": settings.host,
