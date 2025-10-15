@@ -111,6 +111,3 @@ def create_app(lifespan=None) -> FastAPI:
     )
 
     return app
-
-
-app = create_app()
