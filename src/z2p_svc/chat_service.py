@@ -264,12 +264,21 @@ async def prepare_request_data(
     :param streaming: 是否为流式请求
     :return: 包含请求数据、查询参数和请求头的元组
     """
-    if settings.verbose_logging:
-        logger.debug(
-            "Prepare request data start: model={}, streaming={}, message_count={}",
-            request.model,
-            streaming,
-            len(request.messages),
+    logger.info(
+        "Preparing request data: model={}, streaming={}, message_count={}",
+        request.model,
+        streaming,
+        len(request.messages),
+    )
+    
+    # 预加载模型映射表以支持动态模型ID转换
+    from .model_service import get_models
+    try:
+        await get_models(access_token=access_token, use_cache=True)
+    except Exception as e:
+        logger.warning(
+            "Failed to fetch models for mapping initialization: error={}. Will use existing mappings.",
+            str(e)
         )
     
     convert_dict = convert_messages(request.messages)
@@ -280,7 +289,22 @@ async def prepare_request_data(
     auth_token = access_token
     cookies = {}
 
-    upstream_model_id = settings.REVERSE_MODELS_MAPPING.get(request.model, request.model)
+    # 将客户端模型ID转换为上游API识别的模型ID
+    upstream_model_id = settings.REVERSE_MODELS_MAPPING.get(request.model)
+    
+    if upstream_model_id:
+        if settings.verbose_logging:
+            logger.debug(
+                "Model mapped via REVERSE_MODELS_MAPPING: {} -> {}",
+                request.model,
+                upstream_model_id
+            )
+    else:
+        upstream_model_id = request.model
+        logger.warning(
+            "No reverse mapping found for model={}, using original ID. This may cause upstream API errors.",
+            request.model
+        )
     
     zai_data = {
         "stream": True,
@@ -290,6 +314,7 @@ async def prepare_request_data(
         "id": str(uuid.uuid4()),
     }
 
+    # 提取用户最后一条消息文本用于签名生成
     signature_content = convert_dict.get("last_user_message_text", "")
     if not signature_content and zai_data["messages"]:
         last_msg = zai_data["messages"][-1]
@@ -299,8 +324,9 @@ async def prepare_request_data(
     if convert_dict.get("file_urls"):
         file_urls = convert_dict.get("file_urls", [])
         logger.info(
-            "File upload processing started: file_count={}, chat_id={}, request_id={}",
+            "File upload processing started: file_count={}, model={}, chat_id={}, request_id={}",
             len(file_urls),
+            request.model,
             zai_data["chat_id"],
             zai_data["id"],
         )
@@ -308,6 +334,7 @@ async def prepare_request_data(
         file_uploader = FileUploader(auth_token, zai_data["chat_id"], cookies)
         uploaded_file_ids = []
         
+        # 遍历所有文件URL并根据协议类型选择上传方式
         for idx, url in enumerate(file_urls):
             try:
                 if url.startswith("data:"):
@@ -326,11 +353,13 @@ async def prepare_request_data(
                     zai_data["id"],
                 )
                 
+                # 处理base64编码的数据URL
                 if url.startswith("data:"):
                     if ";base64," in url:
                         header, base64_data = url.split(";base64,", 1)
                         mime_type = header.split(":", 1)[1] if ":" in header else ""
                         
+                        # 根据MIME类型推断文件扩展名
                         file_ext = None
                         if mime_type.startswith("image/"):
                             file_ext = mime_type.split("/")[1]
@@ -356,6 +385,7 @@ async def prepare_request_data(
                         logger.warning("Unsupported data URL format (missing base64): url={}", url[:50])
                         continue
                 
+                # 处理HTTP/HTTPS URL
                 elif url.startswith("http"):
                     file_id = await file_uploader.upload_file_from_url(url)
                 
@@ -392,19 +422,22 @@ async def prepare_request_data(
 
         if uploaded_file_ids:
             logger.info(
-                "File upload completed: total_files={}, successful={}, failed={}, request_id={}",
+                "File upload completed: total_files={}, successful={}, failed={}, model={}, request_id={}",
                 len(file_urls),
                 len(uploaded_file_ids),
                 len(file_urls) - len(uploaded_file_ids),
+                request.model,
                 zai_data["id"],
             )
         else:
             logger.warning(
-                "No files uploaded successfully: total_files={}, request_id={}",
+                "No files uploaded successfully: total_files={}, model={}, request_id={}",
                 len(file_urls),
+                request.model,
                 zai_data["id"],
             )
         
+        # 将上传成功的文件ID附加到最后一条用户消息中
         if uploaded_file_ids and zai_data["messages"]:
             last_user_msg_idx = -1
             for i in range(len(zai_data["messages"]) - 1, -1, -1):
@@ -459,16 +492,17 @@ async def prepare_request_data(
     headers["Authorization"] = f"Bearer {auth_token}"
     headers["X-Signature"] = signature_data["signature"]
 
-    if settings.verbose_logging:
-        files_processed = bool(convert_dict.get("file_urls"))
-        logger.debug(
-            "Prepare request data complete: chat_id={}, request_id={}, model_mapped={}, files_processed={}, features={}",
-            zai_data["chat_id"],
-            params["requestId"],
-            zai_data["model"],
-            files_processed,
-            zai_data["features"],
-        )
+    files_processed = bool(convert_dict.get("file_urls"))
+    logger.info(
+        "Request data prepared successfully: chat_id={}, request_id={}, model={}, upstream_model={}, streaming={}, files_processed={}, features={}",
+        zai_data["chat_id"],
+        params["requestId"],
+        request.model,
+        zai_data["model"],
+        streaming,
+        files_processed,
+        zai_data["features"],
+    )
 
     return zai_data, params, headers
 
@@ -492,14 +526,13 @@ async def process_streaming_response(
     user_id = params.get("user_id", "unknown")
     timestamp = params.get("timestamp", "unknown")
 
-    if settings.verbose_logging:
-        logger.debug(
-            "Streaming request start: request_id={}, user_id={}, model={}, url={}",
-            request_id,
-            user_id,
-            request.model,
-            f"{settings.proxy_url}/api/chat/completions",
-        )
+    logger.info(
+        "Streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
+        request_id,
+        user_id,
+        request.model,
+        f"{settings.proxy_url}/api/chat/completions",
+    )
 
     async with httpx.AsyncClient() as client:
         try:
@@ -550,12 +583,12 @@ async def process_streaming_response(
                     
                     raise UpstreamAPIError(response.status_code, error_msg, error_type)
                 
-                if settings.verbose_logging:
-                    logger.debug(
-                        "Streaming response received: request_id={}, status_code={}",
-                        request_id,
-                        response.status_code,
-                    )
+                logger.info(
+                    "Streaming response started: request_id={}, status_code={}, model={}",
+                    request_id,
+                    response.status_code,
+                    request.model,
+                )
                 
                 timestamp = int(datetime.now().timestamp())
                 chunk_count = 0
@@ -604,13 +637,22 @@ async def process_streaming_response(
                     elif phase == "other":
                         usage = data.get("usage", {})
                         content = data.get("delta_content", "")
-                        if settings.verbose_logging:
-                            logger.debug("Streaming completion: request_id={}, total_chunks={}, usage={}", request_id, chunk_count, usage)
+                        logger.info(
+                            "Streaming completion: request_id={}, model={}, total_chunks={}, usage={}",
+                            request_id,
+                            request.model,
+                            chunk_count,
+                            usage
+                        )
                         yield f"data: {json.dumps(create_chat_completion_chunk(content, request.model, timestamp, 'other', usage, 'stop'))}\n\n"
 
                     elif phase == "done":
-                        if settings.verbose_logging:
-                            logger.debug("Streaming done: request_id={}, total_chunks={}", request_id, chunk_count)
+                        logger.info(
+                            "Streaming finished: request_id={}, model={}, total_chunks={}",
+                            request_id,
+                            request.model,
+                            chunk_count
+                        )
                         yield "data: [DONE]\n\n"
                         break
 
@@ -681,14 +723,13 @@ async def process_non_streaming_response(
     user_id = params.get("user_id", "unknown")
     timestamp = params.get("timestamp", "unknown")
 
-    if settings.verbose_logging:
-        logger.debug(
-            "Non-streaming request start: request_id={}, user_id={}, model={}, url={}",
-            request_id,
-            user_id,
-            request.model,
-            f"{settings.proxy_url}/api/chat/completions",
-        )
+    logger.info(
+        "Non-streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
+        request_id,
+        user_id,
+        request.model,
+        f"{settings.proxy_url}/api/chat/completions",
+    )
 
     async with httpx.AsyncClient() as client:
         try:
@@ -739,12 +780,12 @@ async def process_non_streaming_response(
                     
                     raise UpstreamAPIError(response.status_code, error_msg, error_type)
                 
-                if settings.verbose_logging:
-                    logger.debug(
-                        "Non-streaming response received: request_id={}, status_code={}",
-                        request_id,
-                        response.status_code,
-                    )
+                logger.info(
+                    "Non-streaming response started: request_id={}, status_code={}, model={}",
+                    request_id,
+                    response.status_code,
+                    request.model,
+                )
                 
                 chunk_count = 0
                 async for line in response.aiter_lines():
@@ -768,14 +809,14 @@ async def process_non_streaming_response(
                         usage = data.get("usage", {})
                         content = data.get("delta_content", "")
                         full_response += content
-                        if settings.verbose_logging:
-                            logger.debug(
-                                "Non-streaming completion: request_id={}, chunks={}, response_length={}, usage={}",
-                                request_id,
-                                chunk_count,
-                                len(full_response),
-                                usage,
-                            )
+                        logger.info(
+                            "Non-streaming completion: request_id={}, model={}, chunks={}, response_length={}, usage={}",
+                            request_id,
+                            request.model,
+                            chunk_count,
+                            len(full_response),
+                            usage,
+                        )
 
         except UpstreamAPIError:
             raise
