@@ -42,10 +42,8 @@ class AppConfig:
         - production: .env.production
         - 默认: .env
         """
-        # 获取当前环境，默认为 development
         app_env = os.getenv("APP_ENV", "development")
         
-        # 确定要加载的 .env 文件
         env_file = self._get_env_file(app_env)
         
         env = environ.Env(
@@ -57,27 +55,21 @@ class AppConfig:
             PROXY_URL=(str, "https://chat.z.ai"),
         )
 
-        # 加载指定的环境文件
         if env_file.exists():
             environ.Env.read_env(env_file)
         else:
-            # 如果指定的环境文件不存在，尝试加载默认的 .env
             default_env = Path(".env")
             if default_env.exists():
                 environ.Env.read_env(default_env)
         
         self.app_env: str = env("APP_ENV")
 
-        # 注意：以下配置仅用于日志记录和调试信息展示
-        # granian服务器通过环境变量直接读取HOST、PORT、WORKERS配置
-        # 参见 Dockerfile 中的 CMD 命令
         self.host: str = env("HOST")
         self.port: int = env("PORT")
         self.workers: int = env("WORKERS")
         self.log_level: str = env("LOG_LEVEL")
         self.proxy_url: str = env("PROXY_URL")
         
-        # 解析 protocol 和 base_url
         if self.proxy_url.startswith("https://"):
             self.protocol: str = "https:"
             self.base_url: str = self.proxy_url[8:]
@@ -88,10 +80,8 @@ class AppConfig:
             self.protocol: str = "https:"
             self.base_url: str = self.proxy_url
         
-        # 当LOG_LEVEL为DEBUG时，自动启用详细日志和开发功能
         self.verbose_logging: bool = self.log_level.upper() == "DEBUG"
 
-        # 基础请求头（用于API调用）
         self.HEADERS: Final[dict[str, str]] = {
             "Accept": "*/*",
             "Accept-Language": "zh-CN,zh;q=0.9",
@@ -120,11 +110,17 @@ class AppConfig:
         ]
 
         self.MODELS_MAPPING: Final[dict[str, str]] = {
+            "GLM-4-6-API-V1": "glm-4.6",
+            "glm-4.5v": "glm-4.5v",
+            "0727-360B-API": "glm-4.5",
+        }
+        
+        self.REVERSE_MODELS_MAPPING: Final[dict[str, str]] = {
             "glm-4.6": "GLM-4-6-API-V1",
             "glm-4.6-nothinking": "GLM-4-6-API-V1",
             "glm-4.6-search": "GLM-4-6-API-V1",
             "glm-4.6-advanced-search": "GLM-4-6-API-V1",
-            "glm-4.5V": "glm-4.5v",
+            "glm-4.5v": "glm-4.5v",
             "glm-4.5": "0727-360B-API",
         }
     

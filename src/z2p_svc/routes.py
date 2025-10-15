@@ -17,6 +17,7 @@ from .chat_service import (
 from .config import get_settings
 from .logger import get_logger
 from .models import ChatRequest
+from .model_service import get_models
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -40,9 +41,12 @@ async def chat_completions_options() -> Response:
 
 
 @router.get("/models")
-async def list_models() -> dict:
+async def list_models(request: Request) -> dict:
     """列出所有可用的模型。
+    
+    从上游API动态获取模型列表，并进行智能处理和格式化。
 
+    :param request: FastAPI请求对象，用于获取认证信息
     :return: 包含模型列表的字典
 
     Example::
@@ -50,7 +54,21 @@ async def list_models() -> dict:
         >>> response = await list_models()
         >>> print(response["data"])
     """
-    return {"object": "list", "data": settings.ALLOWED_MODELS, "success": True}
+    # 尝试从请求头获取access_token（可选）
+    auth_header = request.headers.get("Authorization")
+    access_token = None
+    if auth_header and " " in auth_header:
+        access_token = auth_header.split(" ")[-1]
+    
+    try:
+        # 从上游API获取模型列表
+        models_data = await get_models(access_token=access_token, use_cache=True)
+        return {**models_data, "success": True}
+    except Exception as e:
+        logger.error("Failed to fetch models: error={}", str(e))
+        # 如果获取失败，返回配置中的默认模型列表
+        logger.warning("Falling back to default models from config")
+        return {"object": "list", "data": settings.ALLOWED_MODELS, "success": False}
 
 
 @router.post("/chat/completions", response_model=None)
@@ -67,6 +85,7 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
     .. note::
        需要在Authorization头中提供Bearer token。
     """
+    # 1. 首先验证Authorization头（最快的检查）
     auth_header = request.headers.get("Authorization")
     if not auth_header:
         logger.warning("Missing authorization header")
@@ -76,9 +95,44 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
             media_type="application/json",
         )
 
+    # 2. 立即验证模型是否在允许列表中（避免后续无用的处理）
+    # 提取access_token用于获取模型列表
     access_token = auth_header.split(" ")[-1] if " " in auth_header else auth_header
     
-    # INFO级别：记录请求和API Key（脱敏）用于审计
+    try:
+        # 尝试从上游API获取模型列表进行验证
+        models_data = await get_models(access_token=access_token, use_cache=True)
+        allowed_model_ids = [model["id"] for model in models_data.get("data", [])]
+        
+        # 如果获取失败或列表为空，使用配置中的默认列表
+        if not allowed_model_ids:
+            logger.warning("No models from upstream, using config defaults")
+            allowed_model_ids = [model["id"] for model in settings.ALLOWED_MODELS]
+    except Exception as e:
+        logger.warning("Failed to fetch models for validation, using config defaults: error={}", str(e))
+        allowed_model_ids = [model["id"] for model in settings.ALLOWED_MODELS]
+    
+    if chat_request.model not in allowed_model_ids:
+        allowed_models = ", ".join(allowed_model_ids)
+        logger.warning(
+            "Invalid model requested: requested_model={}, allowed_models={}",
+            chat_request.model,
+            allowed_models,
+        )
+        return Response(
+            status_code=400,
+            content=json.dumps({
+                "error": {
+                    "message": f"Model {chat_request.model} is not allowed. Allowed models are: {allowed_models}",
+                    "type": "invalid_request_error",
+                    "code": 400,
+                }
+            }),
+            media_type="application/json",
+        )
+    
+    # 3. 记录请求（验证通过后再记录）
+    # INFO级别：记录请求和API Key用于审计
     token_preview = f"{access_token}" if len(access_token) > 12 else "***"
     logger.info(
         "Chat request received: model={}, stream={}, message_count={}, api_key={}",
@@ -87,18 +141,6 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
         len(chat_request.messages),
         token_preview,
     )
-
-    if chat_request.model not in [model["id"] for model in settings.ALLOWED_MODELS]:
-        allowed_models = ", ".join(model["id"] for model in settings.ALLOWED_MODELS)
-        logger.warning(
-            "Invalid model requested: requested_model={}, allowed_models={}",
-            chat_request.model,
-            allowed_models,
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {chat_request.model} is not allowed. Allowed models are: {allowed_models}",
-        )
 
     try:
         if chat_request.stream:
