@@ -23,6 +23,35 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 
+def is_aliyun_blocked_response(response_text: str) -> bool:
+    """检测是否为阿里云拦截的405响应。
+    
+    阿里云的拦截响应包含特定的HTML特征：
+    - 包含 "data-spm" 属性
+    - 包含 "block_message" 或 "block_traceid" 等特定ID
+    - 包含阿里云错误图片URL
+    
+    :param response_text: HTTP响应文本内容
+    :return: 如果是阿里云拦截响应返回True，否则返回False
+    """
+    if not response_text:
+        return False
+    
+    # 检查阿里云拦截响应的特征标识
+    aliyun_indicators = [
+        'data-spm',
+        'block_message',
+        'block_traceid',
+        'errors.aliyun.com',
+        'potential threats to the server',
+        '由于您访问的URL有可能对网站造成安全威胁'
+    ]
+    
+    # 如果包含多个特征标识，则判定为阿里云拦截
+    matches = sum(1 for indicator in aliyun_indicators if indicator in response_text)
+    return matches >= 2
+
+
 class UpstreamAPIError(Exception):
     """上游API错误异常类。
     
@@ -548,6 +577,21 @@ async def process_streaming_response(
                     error_content = await response.aread()
                     error_text = error_content.decode('utf-8', errors='ignore')
                     
+                    # 检测是否为阿里云拦截的405响应
+                    if response.status_code == 405 and is_aliyun_blocked_response(error_text):
+                        logger.warning(
+                            "Aliyun blocked request detected (405 -> 429): request_id={}, user_id={}, timestamp={}, model={}, url={}",
+                            request_id,
+                            user_id,
+                            timestamp,
+                            request.model,
+                            str(response.url),
+                        )
+                        # 将阿里云的405拦截转换为429限流错误
+                        error_msg = "请求过于频繁：同一IP多次请求被拦截，请稍后再试"
+                        error_type = "rate_limit_error"
+                        raise UpstreamAPIError(429, error_msg, error_type)
+                    
                     logger.error(
                         "Upstream HTTP error: status_code={}, response_text={}, request_id={}, user_id={}, timestamp={}, model={}, url={}",
                         response.status_code,
@@ -744,6 +788,21 @@ async def process_non_streaming_response(
                 if response.status_code != 200:
                     error_content = await response.aread()
                     error_text = error_content.decode('utf-8', errors='ignore')
+                    
+                    # 检测是否为阿里云拦截的405响应
+                    if response.status_code == 405 and is_aliyun_blocked_response(error_text):
+                        logger.warning(
+                            "Aliyun blocked request detected (405 -> 429) (non-streaming): request_id={}, user_id={}, timestamp={}, model={}, url={}",
+                            request_id,
+                            user_id,
+                            timestamp,
+                            request.model,
+                            str(response.url),
+                        )
+                        # 将阿里云的405拦截转换为429限流错误
+                        error_msg = "请求过于频繁：同一IP多次请求被拦截，请稍后再试"
+                        error_type = "rate_limit_error"
+                        raise UpstreamAPIError(429, error_msg, error_type)
                     
                     logger.error(
                         "Upstream HTTP error (non-streaming): status_code={}, response_text={}, request_id={}, user_id={}, timestamp={}, model={}, url={}",
