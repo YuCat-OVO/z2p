@@ -9,6 +9,7 @@ import hmac
 import time
 from typing import TypedDict
 
+from .config import get_settings
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,8 +45,8 @@ def generate_signature(request_params: str, content: str) -> SignatureResult:
     .. note::
        签名算法使用5分钟时间窗口，同一时间窗口内生成的中间密钥相同。content参数会被Base64编码后再参与签名计算。
     """
-    # 硬编码的主密钥，与JS脚本中保持一致
-    SECRET_KEY = "junjie"
+    # 从配置中读取主密钥
+    SECRET_KEY = get_settings().secret_key
     # 签名有效的时间窗口（5分钟，单位：毫秒）
     TIME_WINDOW_MS = 5 * 60 * 1000
 

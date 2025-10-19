@@ -54,6 +54,7 @@ class AppConfig:
             LOG_LEVEL=(str, "INFO"),
             VERBOSE_LOGGING=(bool, False),
             PROXY_URL=(str, "https://chat.z.ai"),
+            SECRET_KEY=(str, "junjie"),
         )
 
         if env_file.exists():
@@ -71,6 +72,7 @@ class AppConfig:
         self.log_level: str = env("LOG_LEVEL")
         self.verbose_logging: bool = env("VERBOSE_LOGGING")
         self.proxy_url: str = env("PROXY_URL")
+        self.secret_key: str = env("SECRET_KEY")
         
         if self.proxy_url.startswith("https://"):
             self.protocol: str = "https:"
@@ -101,7 +103,7 @@ class AppConfig:
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
-            "X-FE-Version": "prod-fe-1.0.98",
+            "X-FE-Version": "prod-fe-1.0.103",
         }
 
         self.ALLOWED_MODELS: Final[list[dict[str, str]]] = [
