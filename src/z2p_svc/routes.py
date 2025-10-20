@@ -3,10 +3,13 @@
 本模块定义所有HTTP端点，包括聊天补全、模型列表和CORS预检请求处理。
 """
 
+import base64
 import json
+import time
+import uuid
 from typing import AsyncGenerator, Union
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from .chat_service import (
@@ -18,6 +21,7 @@ from .config import get_settings
 from .logger import get_logger
 from .models import ChatRequest
 from .model_service import get_models
+from .file_uploader import FileUploader
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -59,13 +63,80 @@ async def list_models(request: Request) -> dict:
     if auth_header and " " in auth_header:
         access_token = auth_header.split(" ")[-1]
     
+    
     try:
-        models_data = await get_models(access_token=access_token, use_cache=True)
-        return {**models_data, "success": True}
+        from .model_service import fetch_models_from_upstream
+        models_data = await fetch_models_from_upstream(access_token=access_token)
+        return models_data
     except Exception as e:
         logger.error("Failed to fetch models: error={}", str(e))
-        logger.warning("Falling back to default models from config")
-        return {"object": "list", "data": settings.ALLOWED_MODELS, "success": False}
+        return {"error": str(e)}
+
+@router.post("/v1/files", response_model=None)
+async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[dict, Response]:
+    """处理文件上传请求。
+
+    :param request: FastAPI请求对象，用于获取认证信息
+    :param file: 上传的文件
+    :return: 符合OpenAI文件对象规范的响应
+    """
+    auth_header = request.headers.get("Authorization")
+    access_token = None
+    if auth_header and " " in auth_header:
+        access_token = auth_header.split(" ")[-1]
+
+    if not access_token:
+        logger.warning("Missing authorization header for file upload")
+        return Response(
+            status_code=401,
+            content=json.dumps({"error": {"message": "Unauthorized: Access token is missing", "type": "authentication_error", "code": 401}}),
+            media_type="application/json",
+        )
+
+    try:
+        chat_id = str(uuid.uuid4())
+        file_uploader = FileUploader(access_token, chat_id)
+        
+        file_content = await file.read()
+        base64_encoded_content = base64.b64encode(file_content).decode("utf-8")
+        
+        # 调用 FileUploader 的 upload_base64_file 方法
+        file_id_with_filename = await file_uploader.upload_base64_file(base64_encoded_content, file.filename)
+        
+        if not file_id_with_filename:
+            raise Exception("File upload failed, no ID returned from upstream.")
+
+        # 提取纯粹的UUID作为文件ID
+        pure_file_id = file_id_with_filename.split('_')[0] if '_' in file_id_with_filename else file_id_with_filename
+
+        logger.info(
+            "File uploaded successfully via /v1/files: filename={}, size={}, file_id={}",
+            file.filename,
+            file.size,
+            pure_file_id,
+        )
+
+        return {
+            "id": pure_file_id,
+            "object": "file",
+            "bytes": file.size,
+            "created_at": int(time.time()),
+            "filename": file.filename,
+            "purpose": "assistants", # 暂时设置为 assistants
+        }
+    except Exception as e:
+        logger.error("File upload failed via /v1/files: error={}", str(e))
+        return Response(
+            status_code=500,
+            content=json.dumps({
+                "error": {
+                    "message": f"File upload failed: {str(e)}",
+                    "type": "file_upload_error",
+                    "code": 500,
+                }
+            }),
+            media_type="application/json",
+        )
 
 
 @router.post("/chat/completions", response_model=None)
@@ -175,7 +246,12 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
             )
         else:
             logger.debug("Processing non-streaming request")
-            return await process_non_streaming_response(chat_request, access_token)
+            non_streaming_result = await process_non_streaming_response(chat_request, access_token)
+            return Response(
+                status_code=200,
+                content=json.dumps(non_streaming_result),
+                media_type="application/json",
+            )
     except UpstreamAPIError as e:
         logger.error(
             "Upstream API error in route: status_code={}, error_message={}, error_type={}, model={}",

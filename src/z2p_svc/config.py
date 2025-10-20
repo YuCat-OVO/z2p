@@ -1,6 +1,6 @@
 """应用配置模块。
 
-本模块使用django-environ进行环境变量管理，提供应用运行所需的所有配置参数。
+本模块使用pydantic-settings进行环境变量管理，提供应用运行所需的所有配置参数。
 支持多环境配置：
 - 开发环境：读取 .env.development
 - 生产环境：读取 .env.production
@@ -12,12 +12,30 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
-import environ
+from pydantic import Field, HttpUrl, computed_field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class AppConfig:
+def _get_env_files() -> tuple[str, ...]:
+    """根据APP_ENV环境变量获取要加载的.env文件列表。
+    
+    返回的文件列表按优先级从高到低排列。
+    
+    :return: .env文件路径元组
+    """
+    app_env = os.getenv("APP_ENV", "development")
+    
+    env_files_map = {
+        "development": (".env.development", ".env"),
+        "production": (".env.production", ".env"),
+    }
+    
+    return env_files_map.get(app_env, (".env",))
+
+
+class AppConfig(BaseSettings):
     """应用配置类。
 
     通过环境变量自动加载配置，若环境变量未设置，则使用指定的默认值。
@@ -34,61 +52,117 @@ class AppConfig:
     :ivar MODELS_MAPPING: 模型名称映射
     """
 
-    def __init__(self):
-        """初始化配置，从环境变量读取设置。
-        
-        根据 APP_ENV 环境变量加载对应的 .env 文件：
-        - development: .env.development
-        - production: .env.production
-        - 默认: .env
-        """
-        app_env = os.getenv("APP_ENV", "development")
-        
-        env_file = self._get_env_file(app_env)
-        
-        env = environ.Env(
-            APP_ENV=(str, "development"),
-            HOST=(str, "0.0.0.0"),
-            PORT=(int, 8001),
-            WORKERS=(int, 1),
-            LOG_LEVEL=(str, "INFO"),
-            VERBOSE_LOGGING=(bool, False),
-            PROXY_URL=(str, "https://chat.z.ai"),
-            SECRET_KEY=(str, "junjie"),
-        )
+    model_config = SettingsConfigDict(
+        env_file=_get_env_files(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
 
-        if env_file.exists():
-            environ.Env.read_env(env_file)
-        else:
-            default_env = Path(".env")
-            if default_env.exists():
-                environ.Env.read_env(default_env)
-        
-        self.app_env: str = env("APP_ENV")
+    app_env: Literal["development", "production"] = Field(
+        default="development",
+        description="应用运行环境"
+    )
+    
+    host: str = Field(
+        default="0.0.0.0",
+        description="服务器监听地址"
+    )
+    
+    port: int = Field(
+        default=8001,
+        description="服务器监听端口",
+        gt=0,
+        lt=65536
+    )
+    
+    workers: int = Field(
+        default=1,
+        description="工作进程数",
+        ge=1
+    )
+    
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO",
+        description="日志级别"
+    )
+    
+    verbose_logging: bool = Field(
+        default=False,
+        description="是否启用详细日志模式"
+    )
+    
+    proxy_url: str = Field(
+        default="https://chat.z.ai",
+        description="代理目标URL"
+    )
+    
+    secret_key: str = Field(
+        default="junjie",
+        description="应用密钥"
+    )
+    
+    # Mihomo代理配置
+    mihomo_api_url: str = Field(
+        default="",
+        description="Mihomo API URL"
+    )
+    
+    mihomo_api_secret: str = Field(
+        default="",
+        description="Mihomo API 密钥"
+    )
+    
+    mihomo_proxy_group: str = Field(
+        default="ZhipuAI",
+        description="Mihomo 代理组"
+    )
+    
+    enable_mihomo_switch: bool = Field(
+        default=False,
+        description="是否启用 Mihomo 切换"
+    )
 
-        self.host: str = env("HOST")
-        self.port: int = env("PORT")
-        self.workers: int = env("WORKERS")
-        self.log_level: str = env("LOG_LEVEL")
-        self.verbose_logging: bool = env("VERBOSE_LOGGING")
-        self.proxy_url: str = env("PROXY_URL")
-        self.secret_key: str = env("SECRET_KEY")
-        
+    @field_validator("verbose_logging", mode="before")
+    @classmethod
+    def auto_enable_verbose_for_debug(cls, v: bool, info) -> bool:
+        """如果日志级别为DEBUG，自动启用详细日志（除非明确设置为False）。"""
+        # 如果已经明确设置了verbose_logging，则使用该值
+        if v is not None and isinstance(v, bool):
+            return v
+        # 如果log_level为DEBUG且verbose_logging未设置，则自动启用
+        log_level = info.data.get("log_level", "INFO")
+        if log_level and log_level.upper() == "DEBUG":
+            return True
+        return False
+
+    @computed_field
+    @property
+    def protocol(self) -> str:
+        """从proxy_url解析协议。"""
         if self.proxy_url.startswith("https://"):
-            self.protocol: str = "https:"
-            self.base_url: str = self.proxy_url[8:]
+            return "https:"
         elif self.proxy_url.startswith("http://"):
-            self.protocol: str = "http:"
-            self.base_url: str = self.proxy_url[7:]
+            return "http:"
         else:
-            self.protocol: str = "https:"
-            self.base_url: str = self.proxy_url
-        
-        # 如果日志级别为DEBUG，自动启用详细日志（除非明确设置为False）
-        if self.log_level.upper() == "DEBUG" and not env.bool("VERBOSE_LOGGING", default=None):
-            self.verbose_logging = True
+            return "https:"
 
-        self.HEADERS: Final[dict[str, str]] = {
+    @computed_field
+    @property
+    def base_url(self) -> str:
+        """从proxy_url解析基础URL。"""
+        if self.proxy_url.startswith("https://"):
+            return self.proxy_url[8:]
+        elif self.proxy_url.startswith("http://"):
+            return self.proxy_url[7:]
+        else:
+            return self.proxy_url
+
+    @computed_field
+    @property
+    def HEADERS(self) -> dict[str, str]:
+        """HTTP请求头常量。"""
+        return {
             "Accept": "*/*",
             "Accept-Language": "zh-CN,zh;q=0.9",
             "Cache-Control": "no-cache",
@@ -106,7 +180,10 @@ class AppConfig:
             "X-FE-Version": "prod-fe-1.0.103",
         }
 
-        self.ALLOWED_MODELS: Final[list[dict[str, str]]] = [
+    @property
+    def ALLOWED_MODELS(self) -> list[dict[str, str]]:
+        """允许的模型列表。"""
+        return [
             {"id": "glm-4.6", "name": "GLM-4.6"},
             {"id": "glm-4.5V", "name": "GLM-4.5V"},
             {"id": "glm-4.5", "name": "GLM-4.5"},
@@ -115,13 +192,19 @@ class AppConfig:
             {"id": "glm-4.6-nothinking", "name": "GLM-4.6-NOTHINKING"},
         ]
 
-        self.MODELS_MAPPING: Final[dict[str, str]] = {
+    @property
+    def MODELS_MAPPING(self) -> dict[str, str]:
+        """模型名称映射。"""
+        return {
             "GLM-4-6-API-V1": "glm-4.6",
             "glm-4.5v": "glm-4.5v",
             "0727-360B-API": "glm-4.5",
         }
-        
-        self.REVERSE_MODELS_MAPPING: Final[dict[str, str]] = {
+
+    @property
+    def REVERSE_MODELS_MAPPING(self) -> dict[str, str]:
+        """反向模型名称映射。"""
+        return {
             "glm-4.6": "GLM-4-6-API-V1",
             "glm-4.6-nothinking": "GLM-4-6-API-V1",
             "glm-4.6-search": "GLM-4-6-API-V1",
@@ -129,19 +212,6 @@ class AppConfig:
             "glm-4.5v": "glm-4.5v",
             "glm-4.5": "0727-360B-API",
         }
-    
-    @staticmethod
-    def _get_env_file(app_env: str) -> Path:
-        """根据环境名称获取对应的 .env 文件路径。
-        
-        :param app_env: 环境名称（development/production）
-        :return: .env 文件的 Path 对象
-        """
-        env_files = {
-            "development": Path(".env.development"),
-            "production": Path(".env.production"),
-        }
-        return env_files.get(app_env, Path(".env"))
 
 
 @lru_cache

@@ -13,6 +13,7 @@
 import base64
 import io
 import uuid
+from typing import Any
 
 import httpx
 
@@ -41,6 +42,8 @@ class FileUploader:
         'gif': 'image/gif',
         'bmp': 'image/bmp',
         'webp': 'image/webp',
+        # 视频格式
+        'mp4': 'video/mp4',
         # 文档格式
         'pdf': 'application/pdf',
         'doc': 'application/msword',
@@ -57,6 +60,12 @@ class FileUploader:
         # 代码格式
         'py': 'text/x-python',
     }
+    
+    # 文件类型分类（根据chat.z.ai前端逻辑）
+    IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'bmp']
+    VIDEO_EXTENSIONS = ['mp4']
+    DOCUMENT_EXTENSIONS = ['pdf', 'docx', 'doc', 'xls', 'xlsx', 'ppt', 'pptx']
+    TEXT_EXTENSIONS = ['csv', 'py', 'txt', 'md']
 
     def __init__(self, access_token: str, chat_id: str | None = None, cookies: dict[str, str] | None = None) -> None:
         """初始化文件上传器。
@@ -94,7 +103,7 @@ class FileUploader:
         headers.pop("Content-Type", None)
         headers.pop("X-FE-Version", None)
         
-        headers["Referer"] = f"{self.settings.protocol}//{self.settings.base_url}/c/{self.chat_id}"
+        headers["Referer"] = f"{self.settings.protocol}//{self.settings.base_url}/"
         headers["Authorization"] = f"Bearer {self.access_token}"
         
         return headers
@@ -108,20 +117,39 @@ class FileUploader:
         ext = filename.lower().split('.')[-1] if '.' in filename else ''
         return self.MIME_TYPES.get(ext, 'application/octet-stream')
     
+    def _get_media_type(self, filename: str) -> str:
+        """根据文件扩展名确定媒体类型（用于API负载构建）。
+        
+        :param filename: 文件名
+        :return: 媒体类型：'image', 'video', 'doc', 或 'file'
+        """
+        ext = filename.lower().split('.')[-1] if '.' in filename else ''
+        
+        if ext in self.IMAGE_EXTENSIONS:
+            return 'image'
+        elif ext in self.VIDEO_EXTENSIONS:
+            return 'video'
+        elif ext in self.DOCUMENT_EXTENSIONS:
+            return 'doc'
+        elif ext in self.TEXT_EXTENSIONS:
+            return 'file'
+        else:
+            return 'file'
+    
     async def upload_base64_file(
         self, base64_data: str, filename: str | None = None, file_type: str | None = None
-    ) -> str | None:
+    ) -> dict[str, Any] | None:
         """上传base64编码的文件。
 
         :param base64_data: base64编码的文件数据（不包含data:...;base64,前缀）
         :param filename: 可选的文件名，如果不提供将自动生成
         :param file_type: 可选的文件类型（扩展名），用于确定MIME类型
-        :return: 上传成功返回文件ID（格式：id_filename），失败返回None
+        :return: 上传成功返回完整的文件对象（包含id、name、meta等），失败返回None
 
         Example::
 
             >>> uploader = FileUploader("token")
-            >>> file_id = await uploader.upload_base64_file("iVBORw0KGgo...", "document.pdf")
+            >>> file_obj = await uploader.upload_base64_file("iVBORw0KGgo...", "document.pdf")
         """
         if not filename:
             ext = file_type if file_type else 'png'
@@ -155,6 +183,14 @@ class FileUploader:
             mime_type,
             self.upload_url,
         )
+        
+        if self.settings.verbose_logging:
+            logger.debug(
+                "File upload request details: filename={}, upload_url={}, headers={}",
+                filename,
+                self.upload_url,
+                {k: v if k.lower() != 'authorization' else v[:20] + '...' for k, v in self._get_headers().items()}, # 脱敏 Authorization
+            )
 
         try:
             async with httpx.AsyncClient() as client:
@@ -168,19 +204,36 @@ class FileUploader:
 
                 result = response.json()
                 file_id = result.get("id")
-                file_filename = result.get("filename")
+                file_filename = result.get("filename", filename)
                 cdn_url = result.get("meta", {}).get("cdn_url")
 
-                if file_id and file_filename:
-                    full_id = f"{file_id}_{file_filename}"
+                if file_id:
+                    # 确保file_id是纯UUID（不包含文件名）
+                    pure_file_id = file_id.split('_')[0] if '_' in file_id else file_id
+                    
+                    # 构建符合文档格式的完整文件对象
+                    file_object = {
+                        "type": "file",
+                        "file": result,  # 包含上游API返回的完整JSON对象
+                        "id": pure_file_id,
+                        "url": f"/api/v1/files/{pure_file_id}",
+                        "name": file_filename,
+                        "status": "uploaded",
+                        "size": len(file_data),
+                        "error": "",
+                        "itemId": str(uuid.uuid4()),
+                        "media": self._get_media_type(file_filename),
+                    }
+                    
                     logger.info(
-                        "File uploaded: filename={}, file_id={}, size={}, cdn_url={}",
-                        filename,
-                        full_id,
+                        "File uploaded: filename={}, file_id={}, size={}, media={}, cdn_url={}",
+                        file_filename,
+                        pure_file_id,
                         len(file_data),
+                        file_object["media"],
                         cdn_url,
                     )
-                    return full_id
+                    return file_object
                 else:
                     logger.error("Upload response missing data: response={}", result)
                     return None
@@ -204,16 +257,16 @@ class FileUploader:
             )
             return None
     
-    async def upload_file_from_url(self, file_url: str) -> str | None:
+    async def upload_file_from_url(self, file_url: str) -> dict[str, Any] | None:
         """从URL下载文件并上传。
 
         :param file_url: 文件URL
-        :return: 上传成功返回文件ID（格式：id_filename），失败返回None
+        :return: 上传成功返回完整的文件对象（包含id、name、meta等），失败返回None
 
         Example::
 
             >>> uploader = FileUploader("token")
-            >>> file_id = await uploader.upload_file_from_url("https://example.com/document.pdf")
+            >>> file_obj = await uploader.upload_file_from_url("https://example.com/document.pdf")
         """
         try:
             logger.info("Starting file download from URL: url={}", file_url)

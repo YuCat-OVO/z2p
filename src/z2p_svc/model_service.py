@@ -5,6 +5,7 @@
 """
 
 import httpx
+import stamina
 from typing import Any
 from datetime import datetime
 
@@ -86,12 +87,18 @@ def get_model_id(source_id: str, model_name: str) -> str:
     return smart_id
 
 
+@stamina.retry(on=Exception, attempts=3, wait_initial=1.0, wait_max=5.0)
 async def fetch_models_from_upstream(access_token: str | None = None) -> dict[str, Any]:
-    """从上游API获取模型列表。
+    """从上游API获取模型列表（带重试机制）。
+    
+    使用 stamina 进行自动重试：
+    - 最多重试 3 次
+    - 初始等待 1 秒
+    - 最大等待 5 秒
     
     :param access_token: 可选的访问令牌
     :return: 包含模型列表的字典
-    :raises Exception: 当API请求失败时
+    :raises Exception: 当API请求失败且重试耗尽时
     """
     headers = {
         **settings.HEADERS,

@@ -17,6 +17,7 @@ from .config import get_settings
 from .file_uploader import FileUploader
 from .logger import get_logger
 from .models import ChatRequest, Message
+from .proxy_manager import switch_proxy_node
 from .signature_generator import generate_signature
 
 logger = get_logger(__name__)
@@ -164,7 +165,7 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
         elif isinstance(content, list):
             text_content = ""
             dont_append = False
-            new_message = {"role": role}
+            new_message: dict[str, Any] = {"role": role}
             
             for part in content:
                 part_type = part.get("type")
@@ -183,10 +184,12 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
                         file_urls.append(file_url)
                 
                 elif part_type == "tool_use" and role == "assistant":
-                    if new_message.get("tool_calls") is None:
+                    if "tool_calls" not in new_message:
                         new_message["tool_calls"] = []
                     
-                    new_message["tool_calls"].append({
+                    tool_calls = new_message["tool_calls"]
+                    if isinstance(tool_calls, list):
+                        tool_calls.append({
                         "id": part.get("id"),
                         "type": "function",
                         "function": {
@@ -235,7 +238,7 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
     }
 
 
-def get_model_features(model: str, streaming: bool) -> dict[str, Any]:
+def get_model_features(model: str, streaming: bool, model_capabilities: dict[str, Any] | None = None) -> dict[str, Any]:
     """获取模型特性配置。
     
     根据模型ID自动识别并配置相应的功能开关：
@@ -243,8 +246,9 @@ def get_model_features(model: str, streaming: bool) -> dict[str, Any]:
     - search: 启用网络搜索
     - advanced-search: 启用高级搜索（包含MCP服务器）
 
-    :param model: 模型名称
+    :param model: 模型名称（客户端请求的模型ID，可能包含功能后缀）
     :param streaming: 是否为流式请求
+    :param model_capabilities: 上游模型的能力配置（从模型列表中获取）
     :return: 包含特性和MCP服务器配置的字典
     """
     features = {
@@ -259,111 +263,183 @@ def get_model_features(model: str, streaming: bool) -> dict[str, Any]:
     
     model_lower = model.lower()
 
-    if "nothinking" in model_lower:
+    # 检查模型ID中的功能后缀
+    has_nothinking_suffix = "nothinking" in model_lower
+    has_search_suffix = "search" in model_lower
+    has_advanced_search_suffix = "advanced" in model_lower and "search" in model_lower
+
+    # 处理 nothinking 后缀
+    if has_nothinking_suffix:
         features["enable_thinking"] = False
         if settings.verbose_logging:
-            logger.debug("Model feature detected: nothinking disabled for model={}", model)
+            logger.debug("Model feature detected: nothinking suffix disabled thinking for model={}", model)
     elif not streaming:
         features["enable_thinking"] = False
         if settings.verbose_logging:
             logger.debug("Thinking disabled for non-streaming request: model={}", model)
+    else:
+        # 检查上游模型是否支持 thinking 能力
+        if model_capabilities:
+            supports_thinking = model_capabilities.get("capabilities", {}).get("think", False)
+            if not supports_thinking:
+                features["enable_thinking"] = False
+                if settings.verbose_logging:
+                    logger.debug("Thinking disabled: upstream model does not support thinking capability, model={}", model)
 
-    if "search" in model_lower:
+    # 处理 search 后缀
+    if has_search_suffix:
         features["web_search"] = True
         features["auto_web_search"] = True
         features["preview_mode"] = True
         if settings.verbose_logging:
-            logger.debug("Model feature detected: search enabled for model={}", model)
+            logger.debug("Model feature detected: search suffix enabled for model={}", model)
         
-        if "advanced" in model_lower:
+        if has_advanced_search_suffix:
             mcp_servers = ["advanced-search"]
             if settings.verbose_logging:
-                logger.debug("Model feature detected: advanced-search MCP server enabled for model={}", model)
+                logger.debug("Model feature detected: advanced-search suffix enabled MCP server for model={}", model)
 
     return {"features": features, "mcp_servers": mcp_servers}
 
 
 async def prepare_request_data(
-    request: ChatRequest, access_token: str, streaming: bool = True
+    chat_request: ChatRequest, access_token: str, streaming: bool = True
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """准备上游API请求数据。
 
-    :param request: 聊天请求对象
+    :param fastapi_request: FastAPI请求对象，用于获取客户端信息
+    :param chat_request: 聊天请求对象
     :param access_token: 访问令牌
     :param streaming: 是否为流式请求
     :return: 包含请求数据、查询参数和请求头的元组
     """
     logger.info(
         "Preparing request data: model={}, streaming={}, message_count={}",
-        request.model,
+        chat_request.model,
         streaming,
-        len(request.messages),
+        len(chat_request.messages),
     )
     
     # 预加载模型映射表以支持动态模型ID转换
     from .model_service import get_models
+    models = []  # 初始化 models 变量
     try:
-        await get_models(access_token=access_token, use_cache=True)
+        models_data = await get_models(access_token=access_token, use_cache=True)
+        models = models_data.get("data", [])
     except Exception as e:
         logger.warning(
             "Failed to fetch models for mapping initialization: error={}. Will use existing mappings.",
             str(e)
         )
     
-    convert_dict = convert_messages(request.messages)
-    
+    convert_dict = convert_messages(chat_request.messages)
+
+    # chat_id 应该在会话开始时生成一次，然后在整个会话中复用
+    # 这里每次都生成新的ID是为了模拟新会话，实际应用中应该从请求中获取或维护会话状态
     chat_id = str(uuid.uuid4())
-    
-    user_id = "anonymous"
+
+    # user_id 应该从JWT token中提取，这里暂时生成随机ID
+    user_id = str(uuid.uuid4())
     auth_token = access_token
     cookies = {}
 
     # 将客户端模型ID转换为上游API识别的模型ID
-    upstream_model_id = settings.REVERSE_MODELS_MAPPING.get(request.model)
+    upstream_model_id = settings.REVERSE_MODELS_MAPPING.get(chat_request.model)
     
     if upstream_model_id:
         if settings.verbose_logging:
             logger.debug(
                 "Model mapped via REVERSE_MODELS_MAPPING: {} -> {}",
-                request.model,
+                chat_request.model,
                 upstream_model_id
             )
     else:
-        upstream_model_id = request.model
+        upstream_model_id = chat_request.model
         logger.warning(
             "No reverse mapping found for model={}, using original ID. This may cause upstream API errors.",
-            request.model
+            chat_request.model
         )
     
-    zai_data = {
-        "stream": True,
+    zai_data: dict[str, Any] = {
+        "stream": streaming,
         "model": upstream_model_id,
         "messages": convert_dict["messages"],
+        "signature_prompt": convert_dict.get("last_user_message_text", ""),
+        "params": {},
+        "files": [],
+        "mcp_servers": [],
+        "features": {},
+        "variables": {
+            "{{CURRENT_DATETIME}}": datetime.now().isoformat(),
+            "{{CURRENT_DATE}}": datetime.now().strftime("%Y-%m-%d"),
+            "{{CURRENT_TIME}}": datetime.now().strftime("%H:%M:%S"),
+            "{{CURRENT_WEEKDAY}}": datetime.now().strftime("%A"),
+            "{{CURRENT_TIMEZONE}}": "Asia/Shanghai", # 虚假的时区
+            "{{USER_LANGUAGE}}": "zh-CN", # 虚假的语言
+        },
+        "model_item": None,  # 初始化 model_item 字段
+        "background_tasks": {"title_generation": True, "tags_generation": True}, # 补充 background_tasks 字段
+        "stream_options": {"include_usage": True}, # 补充 stream_options 字段
         "chat_id": chat_id,
         "id": str(uuid.uuid4()),
     }
 
-    # 提取用户最后一条消息文本用于签名生成
+    # 查找匹配的模型并提取完整的模型信息
+    model_found = False
+    model_capabilities = None
+    for model in models:
+        if model["id"] == chat_request.model:
+            # 使用完整的模型对象，包含所有字段
+            zai_data["model_item"] = model
+            # 提取模型能力配置用于特性判断
+            model_capabilities = model.get("info", {}).get("meta", {}).get("capabilities", {})
+            model_found = True
+            break
+    
+    # 如果没有找到模型，使用上游模型ID构造一个基本的model_item
+    if not model_found:
+        zai_data["model_item"] = {
+            "id": upstream_model_id,
+            "name": upstream_model_id,
+            "owned_by": "openai",
+            "info": {
+                "id": upstream_model_id,
+                "name": upstream_model_id,
+                "meta": {
+                    "capabilities": {}
+                }
+            }
+        }
+        logger.warning(
+            "Model not found in models list, using upstream_model_id: model={}, upstream_model={}",
+            chat_request.model,
+            upstream_model_id
+        )
+
+    # # 添加生成参数 (仅传递 ChatRequest 中存在的参数)
+    # if chat_request.temperature is not None:
+    #     zai_data["params"]["temperature"] = chat_request.temperature
+    # if chat_request.top_p is not None:
+    #     zai_data["params"]["top_p"] = chat_request.top_p
+    # if chat_request.max_tokens is not None:
+    #     zai_data["params"]["max_tokens"] = chat_request.max_tokens
+
     signature_content = convert_dict.get("last_user_message_text", "")
-    if not signature_content and zai_data["messages"]:
-        last_msg = zai_data["messages"][-1]
-        if isinstance(last_msg.get("content"), str):
-            signature_content = last_msg["content"]
+
+    uploaded_file_objects = []  # 存储上传成功的完整文件对象
 
     if convert_dict.get("file_urls"):
         file_urls = convert_dict.get("file_urls", [])
         logger.info(
             "File upload processing started: file_count={}, model={}, chat_id={}, request_id={}",
             len(file_urls),
-            request.model,
+            chat_request.model,
             zai_data["chat_id"],
             zai_data["id"],
         )
         
         file_uploader = FileUploader(auth_token, zai_data["chat_id"], cookies)
-        uploaded_file_ids = []
         
-        # 遍历所有文件URL并根据协议类型选择上传方式
         for idx, url in enumerate(file_urls):
             try:
                 if url.startswith("data:"):
@@ -382,15 +458,17 @@ async def prepare_request_data(
                     zai_data["id"],
                 )
                 
-                # 处理base64编码的数据URL
+                file_object = None
+                
                 if url.startswith("data:"):
                     if ";base64," in url:
                         header, base64_data = url.split(";base64,", 1)
                         mime_type = header.split(":", 1)[1] if ":" in header else ""
                         
-                        # 根据MIME类型推断文件扩展名
                         file_ext = None
                         if mime_type.startswith("image/"):
+                            file_ext = mime_type.split("/")[1]
+                        elif mime_type.startswith("video/"):
                             file_ext = mime_type.split("/")[1]
                         elif "pdf" in mime_type:
                             file_ext = "pdf"
@@ -409,31 +487,31 @@ async def prepare_request_data(
                         elif "python" in mime_type:
                             file_ext = "py"
                         
-                        file_id = await file_uploader.upload_base64_file(base64_data, file_type=file_ext)
+                        file_object = await file_uploader.upload_base64_file(base64_data, file_type=file_ext)
                     else:
                         logger.warning("Unsupported data URL format (missing base64): url={}", url[:50])
                         continue
                 
-                # 处理HTTP/HTTPS URL
                 elif url.startswith("http"):
-                    file_id = await file_uploader.upload_file_from_url(url)
+                    file_object = await file_uploader.upload_file_from_url(url)
                 
                 else:
                     logger.warning("Unsupported file URL format: url={}", url[:50])
                     continue
 
-                if file_id:
-                    uploaded_file_ids.append(file_id)
+                if file_object:
+                    uploaded_file_objects.append(file_object)
                     logger.info(
-                        "File uploaded successfully: index={}/{}, file_id={}, request_id={}",
+                        "File uploaded successfully: index={}/{}, file_id={}, media={}, request_id={}",
                         idx + 1,
                         len(file_urls),
-                        file_id,
+                        file_object["id"],
+                        file_object["media"],
                         zai_data["id"],
                     )
                 else:
                     logger.warning(
-                        "File upload returned no ID: index={}/{}, url_preview={}, request_id={}",
+                        "File upload returned no object: index={}/{}, url_preview={}, request_id={}",
                         idx + 1,
                         len(file_urls),
                         url[:80] if len(url) > 80 else url,
@@ -449,25 +527,38 @@ async def prepare_request_data(
                     zai_data["id"],
                 )
 
-        if uploaded_file_ids:
+        if uploaded_file_objects:
             logger.info(
                 "File upload completed: total_files={}, successful={}, failed={}, model={}, request_id={}",
                 len(file_urls),
-                len(uploaded_file_ids),
-                len(file_urls) - len(uploaded_file_ids),
-                request.model,
+                len(uploaded_file_objects),
+                len(file_urls) - len(uploaded_file_objects),
+                chat_request.model,
                 zai_data["id"],
             )
         else:
             logger.warning(
                 "No files uploaded successfully: total_files={}, model={}, request_id={}",
                 len(file_urls),
-                request.model,
+                chat_request.model,
                 zai_data["id"],
             )
         
-        # 将上传成功的文件ID附加到最后一条用户消息中
-        if uploaded_file_ids and zai_data["messages"]:
+        # 根据文档逻辑：根据media类型区分处理
+        # 图片/视频：嵌入到messages.content数组
+        # 其他文件：放入顶层files数组
+        
+        image_video_files = []
+        other_files = []
+        
+        for file_obj in uploaded_file_objects:
+            if file_obj["media"] in ("image", "video"):
+                image_video_files.append(file_obj)
+            else:
+                other_files.append(file_obj)
+        
+        # 处理最后一条用户消息
+        if uploaded_file_objects and zai_data["messages"]:
             last_user_msg_idx = -1
             for i in range(len(zai_data["messages"]) - 1, -1, -1):
                 if zai_data["messages"][i].get("role") == "user":
@@ -478,55 +569,109 @@ async def prepare_request_data(
                 last_msg = zai_data["messages"][last_user_msg_idx]
                 text_content = last_msg.get("content", "")
                 
-                content_array = [
-                    {"type": "text", "text": text_content}
-                ]
-                
-                for file_id in uploaded_file_ids:
-                    content_array.append({
-                        "type": "image_url",
-                        "image_url": {"url": file_id}
-                    })
-                
-                zai_data["messages"][last_user_msg_idx] = {
-                    "role": "user",
-                    "content": content_array
-                }
-                
-                logger.info(
-                    "Message reconstructed with files: text_length={}, file_count={}, request_id={}",
-                    len(text_content),
-                    len(uploaded_file_ids),
-                    zai_data["id"],
-                )
+                # 如果有图片或视频，构建content数组
+                if image_video_files:
+                    content_array = [{"type": "text", "text": text_content}]
+                    
+                    for file_obj in image_video_files:
+                        if file_obj["media"] == "image":
+                            content_array.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"{file_obj['id']}_{file_obj['name']}"}
+                            })
+                        elif file_obj["media"] == "video":
+                            content_array.append({
+                                "type": "video_url",
+                                "video_url": {"url": f"{file_obj['id']}_{file_obj['name']}"}
+                            })
+                    
+                    zai_data["messages"][last_user_msg_idx] = {
+                        "role": "user",
+                        "content": content_array
+                    }
+                    
+                    logger.info(
+                        "Message reconstructed with media files: text_length={}, image_count={}, video_count={}, request_id={}",
+                        len(text_content),
+                        sum(1 for f in image_video_files if f["media"] == "image"),
+                        sum(1 for f in image_video_files if f["media"] == "video"),
+                        zai_data["id"],
+                    )
+        
+        # 只有非图片/视频文件才放入顶层files数组
+        if other_files:
+            zai_data["files"] = other_files
+            logger.info(
+                "Non-media files added to top-level files array: count={}, request_id={}",
+                len(other_files),
+                zai_data["id"],
+            )
 
-    features_dict = get_model_features(request.model, streaming)
+    # 获取模型特性配置，传入模型能力信息
+    features_dict = get_model_features(chat_request.model, streaming, model_capabilities)
     zai_data["features"] = features_dict["features"]
     if features_dict["mcp_servers"]:
         zai_data["mcp_servers"] = features_dict["mcp_servers"]
 
+    # 构造查询参数
     params = {
         "requestId": str(uuid.uuid4()),
         "timestamp": str(int(time.time() * 1000)),
         "user_id": user_id,
+        "token": auth_token, # JWT token
+        "version": settings.HEADERS["X-FE-Version"], # 前端应用版本号
+        "user_agent": settings.HEADERS["User-Agent"], # 前端应用版本号
+        "platform": "web", # 客户端平台
+        "language": "zh-CN",
+        "languages": "zh-CN",
+
+        "timezone": "Asia/Shanghai",
+        "cookie_enabled": "true", # 暂时硬编码
+        "browser_name": "Chrome", # 模拟 Chrome
+        "os_name": "Windows", # 模拟 Windows
+        "screen_width": "1920", # 占位符
+        "screen_height": "1080", # 占位符
+        "screen_resolution": "1920x1080", # 占位符
+        "viewport_width": "1920", # 占位符
+        "viewport_height": "1080", # 占位符
+        "viewport_size": "1920x1080", # 占位符
+        "color_depth": "24", # 占位符
+        "pixel_ratio": "1", # 占位符
+        "is_mobile": "false", # 占位符
+        "is_touch": "false", # 占位符
+        "max_touch_points": "0", # 占位符
+
+
+        "hash": "", # 占位符
+        "host": "chat.z.ai", # 占位符
+        "hostname": "chat.z.ai", # 占位符
+        "protocol": "https", # 占位符
+        "referrer": "", # 占位符
+        "title": "Z.ai Chat", # 占位符
+        "timezone_offset": "-480", # 占位符
+        "local_time": datetime.now().isoformat(),
+        "utc_time": datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT"),
     }
 
     request_params = f"requestId,{params['requestId']},timestamp,{params['timestamp']},user_id,{params['user_id']}"
     signature_data = generate_signature(request_params, signature_content)
     params["signature_timestamp"] = str(signature_data["timestamp"])
-    
+
     zai_data["signature_prompt"] = signature_content
 
     headers = settings.HEADERS.copy()
     headers["Authorization"] = f"Bearer {auth_token}"
     headers["X-Signature"] = signature_data["signature"]
+    headers["Accept-Language"] = "zh-CN"
+    headers["X-FE-Version"] = settings.HEADERS["X-FE-Version"] # 前端版本号
+    headers["Referer"] = f"{settings.protocol}//{settings.base_url}/c/{chat_id}"
 
     files_processed = bool(convert_dict.get("file_urls"))
     logger.info(
         "Request data prepared successfully: chat_id={}, request_id={}, model={}, upstream_model={}, streaming={}, files_processed={}, features={}",
         zai_data["chat_id"],
         params["requestId"],
-        request.model,
+        chat_request.model,
         zai_data["model"],
         streaming,
         files_processed,
@@ -537,11 +682,12 @@ async def prepare_request_data(
 
 
 async def process_streaming_response(
-    request: ChatRequest, access_token: str
+    chat_request: ChatRequest, access_token: str
 ) -> AsyncGenerator[str, None]:
     """处理流式响应。
 
-    :param request: 聊天请求对象
+    :param fastapi_request: FastAPI请求对象，用于获取客户端信息
+    :param chat_request: 聊天请求对象
     :param access_token: 访问令牌
     :yields: SSE格式的数据块
     :raises UpstreamAPIError: 当上游API返回错误状态码时
@@ -549,7 +695,7 @@ async def process_streaming_response(
     .. note::
        响应格式遵循OpenAI的流式API规范。
     """
-    zai_data, params, headers = await prepare_request_data(request, access_token)
+    zai_data, params, headers = await prepare_request_data(chat_request, access_token)
     
     request_id = params.get("requestId", "unknown")
     user_id = params.get("user_id", "unknown")
@@ -559,9 +705,19 @@ async def process_streaming_response(
         "Streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
         request_id,
         user_id,
-        request.model,
+        chat_request.model,
         f"{settings.proxy_url}/api/chat/completions",
     )
+    
+    if settings.verbose_logging:
+        logger.debug(
+            "Streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
+            request_id,
+            f"{settings.proxy_url}/api/chat/completions",
+            {k: v if k.lower() != 'authorization' else v[:20] + '...' for k, v in headers.items()}, # 脱敏 Authorization
+            params,
+            zai_data,
+        )
 
     async with httpx.AsyncClient() as client:
         try:
@@ -584,9 +740,13 @@ async def process_streaming_response(
                             request_id,
                             user_id,
                             timestamp,
-                            request.model,
+                            chat_request.model,
                             str(response.url),
                         )
+                        # 如果启用了代理切换，尝试切换节点
+                        if settings.enable_mihomo_switch:
+                            logger.info("Attempting Mihomo proxy switch due to Aliyun block: request_id={}", request_id)
+                            await switch_proxy_node()
                         # 将阿里云的405拦截转换为429限流错误
                         error_msg = "请求过于频繁：同一IP多次请求被拦截，请稍后再试"
                         error_type = "rate_limit_error"
@@ -599,7 +759,7 @@ async def process_streaming_response(
                         request_id,
                         user_id,
                         timestamp,
-                        request.model,
+                        chat_request.model,
                         str(response.url),
                     )
                     
@@ -631,7 +791,7 @@ async def process_streaming_response(
                     "Streaming response started: request_id={}, status_code={}, model={}",
                     request_id,
                     response.status_code,
-                    request.model,
+                    chat_request.model,
                 )
                 
                 timestamp = int(datetime.now().timestamp())
@@ -658,7 +818,7 @@ async def process_streaming_response(
                         chunk_count += 1
                         if settings.verbose_logging and chunk_count % 10 == 0:
                             logger.debug("Streaming thinking progress: request_id={}, chunks={}", request_id, chunk_count)
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, request.model, timestamp, 'thinking'))}\n\n"
+                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'thinking'))}\n\n"
 
                     elif phase == "answer":
                         content = data.get("delta_content") or data.get("edit_content", "")
@@ -667,7 +827,7 @@ async def process_streaming_response(
                         chunk_count += 1
                         if settings.verbose_logging and chunk_count % 10 == 0:
                             logger.debug("Streaming answer progress: request_id={}, chunks={}", request_id, chunk_count)
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, request.model, timestamp, 'answer'))}\n\n"
+                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer'))}\n\n"
 
                     elif phase == "tool_call":
                         content = data.get("delta_content") or data.get("edit_content", "")
@@ -676,7 +836,7 @@ async def process_streaming_response(
                         chunk_count += 1
                         if settings.verbose_logging and chunk_count % 10 == 0:
                             logger.debug("Streaming tool_call progress: request_id={}, chunks={}", request_id, chunk_count)
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, request.model, timestamp, 'tool_call'))}\n\n"
+                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'tool_call'))}\n\n"
 
                     elif phase == "other":
                         usage = data.get("usage", {})
@@ -684,17 +844,17 @@ async def process_streaming_response(
                         logger.info(
                             "Streaming completion: request_id={}, model={}, total_chunks={}, usage={}",
                             request_id,
-                            request.model,
+                            chat_request.model,
                             chunk_count,
                             usage
                         )
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, request.model, timestamp, 'other', usage, 'stop'))}\n\n"
+                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', usage, 'stop'))}\n\n"
 
                     elif phase == "done":
                         logger.info(
                             "Streaming finished: request_id={}, model={}, total_chunks={}",
                             request_id,
-                            request.model,
+                            chat_request.model,
                             chunk_count
                         )
                         yield "data: [DONE]\n\n"
@@ -747,11 +907,12 @@ async def process_streaming_response(
 
 
 async def process_non_streaming_response(
-    request: ChatRequest, access_token: str
+    chat_request: ChatRequest, access_token: str
 ) -> dict[str, Any]:
     """处理非流式响应。
 
-    :param request: 聊天请求对象
+    :param fastapi_request: FastAPI请求对象，用于获取客户端信息
+    :param chat_request: 聊天请求对象
     :param access_token: 访问令牌
     :return: 完整的聊天补全响应
     :raises UpstreamAPIError: 当上游API返回错误状态码时
@@ -759,7 +920,7 @@ async def process_non_streaming_response(
     .. note::
        响应格式遵循OpenAI的非流式API规范。
     """
-    zai_data, params, headers = await prepare_request_data(request, access_token, False)
+    zai_data, params, headers = await prepare_request_data(chat_request, access_token, False)
     full_response = ""
     usage = {}
     
@@ -771,9 +932,19 @@ async def process_non_streaming_response(
         "Non-streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
         request_id,
         user_id,
-        request.model,
+        chat_request.model,
         f"{settings.proxy_url}/api/chat/completions",
     )
+    
+    if settings.verbose_logging:
+        logger.debug(
+            "Non-streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
+            request_id,
+            f"{settings.proxy_url}/api/chat/completions",
+            {k: v if k.lower() != 'authorization' else v[:20] + '...' for k, v in headers.items()}, # 脱敏 Authorization
+            params,
+            zai_data,
+        )
 
     async with httpx.AsyncClient() as client:
         try:
@@ -796,9 +967,13 @@ async def process_non_streaming_response(
                             request_id,
                             user_id,
                             timestamp,
-                            request.model,
+                            chat_request.model,
                             str(response.url),
                         )
+                        # 如果启用了代理切换，尝试切换节点
+                        if settings.enable_mihomo_switch:
+                            logger.info("Attempting Mihomo proxy switch due to Aliyun block (non-streaming): request_id={}", request_id)
+                            await switch_proxy_node()
                         # 将阿里云的405拦截转换为429限流错误
                         error_msg = "请求过于频繁：同一IP多次请求被拦截，请稍后再试"
                         error_type = "rate_limit_error"
@@ -811,7 +986,7 @@ async def process_non_streaming_response(
                         request_id,
                         user_id,
                         timestamp,
-                        request.model,
+                        chat_request.model,
                         str(response.url),
                     )
                     
@@ -843,7 +1018,7 @@ async def process_non_streaming_response(
                     "Non-streaming response started: request_id={}, status_code={}, model={}",
                     request_id,
                     response.status_code,
-                    request.model,
+                    chat_request.model,
                 )
                 
                 chunk_count = 0
@@ -871,7 +1046,7 @@ async def process_non_streaming_response(
                         logger.info(
                             "Non-streaming completion: request_id={}, model={}, chunks={}, response_length={}, usage={}",
                             request_id,
-                            request.model,
+                            chat_request.model,
                             chunk_count,
                             len(full_response),
                             usage,
@@ -926,7 +1101,7 @@ async def process_non_streaming_response(
         "id": f"chatcmpl-{uuid.uuid4()}",
         "object": "chat.completion",
         "created": int(datetime.now().timestamp()),
-        "model": request.model,
+        "model": chat_request.model,
         "choices": [
             {
                 "index": 0,
