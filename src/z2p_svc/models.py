@@ -301,3 +301,183 @@ class DownstreamModelsResponse(BaseModel):
         ...,
         description="模型列表（包含基础模型和所有生成的功能变体）"
     )
+
+
+# --- Chat Completion Models (聊天补全相关模型) ---
+
+class ChatCompletionChunkDelta(BaseModel):
+    """聊天补全流式响应的 delta 对象。
+    
+    表示流式响应中的增量内容。
+    """
+    role: Optional[str] = Field(default=None, description="消息角色（assistant）")
+    content: Optional[str] = Field(default=None, description="增量文本内容")
+    reasoning_content: Optional[str] = Field(default=None, description="推理过程内容（thinking 阶段）")
+
+
+class ChatCompletionChunkChoice(BaseModel):
+    """聊天补全流式响应的选择对象。"""
+    index: int = Field(default=0, description="选择索引")
+    delta: ChatCompletionChunkDelta = Field(..., description="增量内容")
+    finish_reason: Optional[str] = Field(default=None, description="完成原因：stop, length, error 等")
+
+
+class ChatCompletionUsage(BaseModel):
+    """聊天补全的使用统计信息。"""
+    prompt_tokens: Optional[int] = Field(default=None, description="输入 token 数量")
+    completion_tokens: Optional[int] = Field(default=None, description="输出 token 数量")
+    total_tokens: Optional[int] = Field(default=None, description="总 token 数量")
+
+
+class ChatCompletionChunk(BaseModel):
+    """聊天补全流式响应块（OpenAI 兼容）。
+    
+    符合 OpenAI API 规范的流式响应格式。
+    参考：https://platform.openai.com/docs/api-reference/chat/streaming
+    """
+    id: str = Field(..., description="响应唯一标识符（如 chatcmpl-xxx）")
+    object: str = Field(default="chat.completion.chunk", description="对象类型")
+    created: int = Field(..., description="创建时间戳（Unix 时间）")
+    model: str = Field(..., description="使用的模型名称")
+    choices: List[ChatCompletionChunkChoice] = Field(..., description="响应选择列表")
+    usage: Optional[ChatCompletionUsage] = Field(default=None, description="使用统计（仅在最后一个块中包含）")
+
+
+class ChatCompletionMessage(BaseModel):
+    """聊天补全的完整消息对象。"""
+    role: str = Field(..., description="消息角色（assistant）")
+    content: str = Field(..., description="完整的消息内容")
+
+
+class ChatCompletionChoice(BaseModel):
+    """聊天补全非流式响应的选择对象。"""
+    index: int = Field(default=0, description="选择索引")
+    message: ChatCompletionMessage = Field(..., description="完整的消息对象")
+    finish_reason: str = Field(..., description="完成原因：stop, length 等")
+
+
+class ChatCompletionResponse(BaseModel):
+    """聊天补全非流式响应（OpenAI 兼容）。
+    
+    符合 OpenAI API 规范的非流式响应格式。
+    参考：https://platform.openai.com/docs/api-reference/chat/object
+    """
+    id: str = Field(..., description="响应唯一标识符（如 chatcmpl-xxx）")
+    object: str = Field(default="chat.completion", description="对象类型")
+    created: int = Field(..., description="创建时间戳（Unix 时间）")
+    model: str = Field(..., description="使用的模型名称")
+    choices: List[ChatCompletionChoice] = Field(..., description="响应选择列表")
+    usage: Optional[ChatCompletionUsage] = Field(default=None, description="使用统计信息")
+
+
+class ErrorDetail(BaseModel):
+    """API 错误详情。"""
+    message: str = Field(..., description="错误消息")
+    type: str = Field(..., description="错误类型")
+    code: Optional[int] = Field(default=None, description="错误代码")
+
+
+class ErrorResponse(BaseModel):
+    """API 错误响应。"""
+    error: ErrorDetail = Field(..., description="错误详情")
+
+
+# --- File Upload Models (文件上传相关模型) ---
+
+class FileObject(BaseModel):
+    """文件对象（OpenAI 兼容）。
+    
+    符合 OpenAI API 规范的文件对象格式。
+    参考：https://platform.openai.com/docs/api-reference/files/object
+    """
+    id: str = Field(..., description="文件唯一标识符")
+    object: str = Field(default="file", description="对象类型")
+    bytes: int = Field(..., description="文件大小（字节）")
+    created_at: int = Field(..., description="创建时间戳（Unix 时间）")
+    filename: str = Field(..., description="文件名")
+    purpose: str = Field(..., description="文件用途（如 assistants）")
+
+
+class UploadedFileObject(BaseModel):
+    """上游 API 返回的文件对象。
+    
+    包含上游 API 特有的字段，用于内部处理。
+    """
+    id: str = Field(..., description="文件唯一标识符（UUID）")
+    name: str = Field(..., description="文件名")
+    media: str = Field(..., description="媒体类型：image, video, document 等")
+    size: Optional[int] = Field(default=None, description="文件大小（字节）")
+    url: Optional[str] = Field(default=None, description="文件访问 URL")
+
+
+# --- Upstream Request Models (上游请求相关模型) ---
+
+class UpstreamRequestParams(BaseModel):
+    """上游 API 请求参数。
+    
+    包含发送到上游 API 的查询参数，用于请求签名和追踪。
+    """
+    model_config = {"extra": "allow"}  # 允许额外字段
+    
+    requestId: str = Field(..., description="请求唯一标识符（UUID）")
+    timestamp: str = Field(..., description="请求时间戳（毫秒）")
+    user_id: str = Field(..., description="用户 ID（UUID）")
+    token: str = Field(..., description="JWT 访问令牌")
+    version: str = Field(..., description="前端应用版本号")
+    user_agent: str = Field(..., description="用户代理字符串")
+    platform: str = Field(default="web", description="客户端平台")
+    language: str = Field(default="zh-CN", description="界面语言")
+    languages: str = Field(default="zh-CN", description="接受的语言列表")
+    timezone: str = Field(default="Asia/Shanghai", description="时区")
+    signature_timestamp: Optional[str] = Field(default=None, description="签名时间戳")
+
+
+class ModelFeatures(BaseModel):
+    """模型功能特性配置。
+    
+    定义模型的各种功能开关，用于控制模型行为。
+    """
+    web_search: bool = Field(default=False, description="是否启用网络搜索")
+    auto_web_search: bool = Field(default=False, description="是否自动触发网络搜索")
+    preview_mode: bool = Field(default=False, description="是否启用预览模式")
+    flags: List[str] = Field(default_factory=list, description="功能标志列表")
+    enable_thinking: bool = Field(default=True, description="是否启用深度思考（思维链）")
+
+
+class UpstreamRequestData(BaseModel):
+    """上游 API 请求数据体。
+    
+    包含发送到上游 API 的完整请求体数据。
+    """
+    model_config = {"extra": "allow"}  # 允许额外字段以支持未来扩展
+    
+    stream: bool = Field(..., description="是否使用流式响应")
+    model: str = Field(..., description="上游模型 ID")
+    messages: List[Dict[str, Any]] = Field(..., description="转换后的消息列表")
+    signature_prompt: str = Field(default="", description="用于签名的提示词内容")
+    params: Dict[str, Any] = Field(default_factory=dict, description="生成参数（temperature, top_p, max_tokens）")
+    files: List[Dict[str, Any]] = Field(default_factory=list, description="非媒体文件列表")
+    mcp_servers: List[str] = Field(default_factory=list, description="MCP 服务器列表")
+    features: Dict[str, Any] = Field(default_factory=dict, description="功能特性配置")
+    variables: Dict[str, str] = Field(default_factory=dict, description="模板变量（日期时间等）")
+    model_item: Optional[Dict[str, Any]] = Field(default=None, description="完整的模型对象")
+    background_tasks: Dict[str, bool] = Field(
+        default_factory=lambda: {"title_generation": True, "tags_generation": True},
+        description="后台任务配置"
+    )
+    stream_options: Dict[str, bool] = Field(
+        default_factory=lambda: {"include_usage": True},
+        description="流式响应选项"
+    )
+    chat_id: str = Field(..., description="会话 ID（UUID）")
+    id: str = Field(..., description="请求 ID（UUID）")
+
+
+class ConvertedMessages(BaseModel):
+    """消息转换结果。
+    
+    包含转换后的消息、文件 URL 和最后一条用户消息文本。
+    """
+    messages: List[Dict[str, Any]] = Field(..., description="转换后的消息列表")
+    file_urls: List[str] = Field(default_factory=list, description="文件 URL 列表")
+    last_user_message_text: str = Field(default="", description="最后一条用户消息的文本内容")

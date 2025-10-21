@@ -19,6 +19,7 @@ import httpx
 
 from .config import get_settings
 from .logger import get_logger
+from .models import UploadedFileObject
 
 logger = get_logger(__name__)
 
@@ -211,29 +212,24 @@ class FileUploader:
                     # 确保file_id是纯UUID（不包含文件名）
                     pure_file_id = file_id.split('_')[0] if '_' in file_id else file_id
                     
-                    # 构建符合文档格式的完整文件对象
-                    file_object = {
-                        "type": "file",
-                        "file": result,  # 包含上游API返回的完整JSON对象
-                        "id": pure_file_id,
-                        "url": f"/api/v1/files/{pure_file_id}",
-                        "name": file_filename,
-                        "status": "uploaded",
-                        "size": len(file_data),
-                        "error": "",
-                        "itemId": str(uuid.uuid4()),
-                        "media": self._get_media_type(file_filename),
-                    }
+                    # 使用 Pydantic 模型构建文件对象
+                    file_object = UploadedFileObject(
+                        id=pure_file_id,
+                        name=file_filename,
+                        media=self._get_media_type(file_filename),
+                        size=len(file_data),
+                        url=f"/api/v1/files/{pure_file_id}",
+                    )
                     
                     logger.info(
                         "File uploaded: filename={}, file_id={}, size={}, media={}, cdn_url={}",
                         file_filename,
                         pure_file_id,
                         len(file_data),
-                        file_object["media"],
+                        file_object.media,
                         cdn_url,
                     )
-                    return file_object
+                    return file_object.model_dump()
                 else:
                     logger.error("Upload response missing data: response={}", result)
                     return None

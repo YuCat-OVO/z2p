@@ -19,7 +19,7 @@ from .chat_service import (
 )
 from .config import get_settings
 from .logger import get_logger
-from .models import ChatRequest
+from .models import ChatRequest, FileObject, ErrorResponse, ErrorDetail
 from .model_service import get_models
 from .file_uploader import FileUploader
 
@@ -105,7 +105,17 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[d
             raise Exception("File upload failed, no ID returned from upstream.")
 
         # 提取纯粹的UUID作为文件ID
-        pure_file_id = file_id_with_filename.split('_')[0] if '_' in file_id_with_filename else file_id_with_filename
+        # file_id_with_filename 可能是字符串或字典，需要处理
+        if isinstance(file_id_with_filename, dict):
+            pure_file_id = file_id_with_filename.get("id", "")
+        else:
+            pure_file_id = file_id_with_filename.split('_')[0] if '_' in file_id_with_filename else file_id_with_filename
+
+        # 确保必需的字段不为 None
+        if not file.filename:
+            raise Exception("Filename is required")
+        if file.size is None:
+            raise Exception("File size is required")
 
         logger.info(
             "File uploaded successfully via /v1/files: filename={}, size={}, file_id={}",
@@ -114,25 +124,27 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[d
             pure_file_id,
         )
 
-        return {
-            "id": pure_file_id,
-            "object": "file",
-            "bytes": file.size,
-            "created_at": int(time.time()),
-            "filename": file.filename,
-            "purpose": "assistants", # 暂时设置为 assistants
-        }
+        # 使用 Pydantic 模型构建响应
+        file_obj = FileObject(
+            id=pure_file_id,
+            bytes=file.size,
+            created_at=int(time.time()),
+            filename=file.filename,
+            purpose="assistants"
+        )
+        return file_obj.model_dump()
     except Exception as e:
         logger.error("File upload failed via /v1/files: error={}", str(e))
+        error_response = ErrorResponse(
+            error=ErrorDetail(
+                message=f"File upload failed: {str(e)}",
+                type="file_upload_error",
+                code=500
+            )
+        )
         return Response(
             status_code=500,
-            content=json.dumps({
-                "error": {
-                    "message": f"File upload failed: {str(e)}",
-                    "type": "file_upload_error",
-                    "code": 500,
-                }
-            }),
+            content=error_response.model_dump_json(),
             media_type="application/json",
         )
 
@@ -216,15 +228,16 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
                     e.error_type,
                     chat_request.model,
                 )
+                error_response = ErrorResponse(
+                    error=ErrorDetail(
+                        message=e.message,
+                        type=e.error_type,
+                        code=e.status_code
+                    )
+                )
                 return Response(
                     status_code=e.status_code,
-                    content=json.dumps({
-                        "error": {
-                            "message": e.message,
-                            "type": e.error_type,
-                            "code": e.status_code,
-                        }
-                    }),
+                    content=error_response.model_dump_json(),
                     media_type="application/json",
                 )
             
@@ -258,14 +271,15 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
             e.error_type,
             chat_request.model,
         )
+        error_response = ErrorResponse(
+            error=ErrorDetail(
+                message=e.message,
+                type=e.error_type,
+                code=e.status_code
+            )
+        )
         return Response(
             status_code=e.status_code,
-            content=json.dumps({
-                "error": {
-                    "message": e.message,
-                    "type": e.error_type,
-                    "code": e.status_code,
-                }
-            }),
+            content=error_response.model_dump_json(),
             media_type="application/json",
         )

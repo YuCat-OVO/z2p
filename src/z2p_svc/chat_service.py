@@ -16,7 +16,21 @@ import httpx
 from .config import get_settings
 from .file_uploader import FileUploader
 from .logger import get_logger
-from .models import ChatRequest, Message
+from .models import (
+    ChatRequest,
+    Message,
+    ChatCompletionChunk,
+    ChatCompletionChunkChoice,
+    ChatCompletionChunkDelta,
+    ChatCompletionResponse,
+    ChatCompletionChoice,
+    ChatCompletionMessage,
+    ChatCompletionUsage,
+    ConvertedMessages,
+    ModelFeatures,
+    UpstreamRequestData,
+    UpstreamRequestParams,
+)
 from .proxy_manager import switch_proxy_node
 from .signature_generator import generate_signature
 
@@ -84,29 +98,32 @@ def create_chat_completion_chunk(
     :param finish_reason: 完成原因
     :return: 符合OpenAI格式的响应数据块
     """
-    delta: dict[str, str] = {"role": "assistant"}
-
+    # 构建 delta 对象
+    delta_kwargs = {"role": "assistant"}
     if phase == "thinking":
-        delta["reasoning_content"] = content
-    elif phase in ("answer", "tool_call"):
-        delta["content"] = content
-    elif phase == "other":
-        delta["content"] = content
-
-    return {
-        "id": f"chatcmpl-{uuid.uuid4()}",
-        "object": "chat.completion.chunk",
-        "created": timestamp,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": delta,
-                "finish_reason": finish_reason if phase == "other" else None,
-            }
-        ],
-        "usage": usage,
-    }
+        delta_kwargs["reasoning_content"] = content
+    elif phase in ("answer", "tool_call", "other"):
+        delta_kwargs["content"] = content
+    
+    delta = ChatCompletionChunkDelta(**delta_kwargs)
+    
+    # 构建 choice 对象
+    choice = ChatCompletionChunkChoice(
+        index=0,
+        delta=delta,
+        finish_reason=finish_reason if phase == "other" else None
+    )
+    
+    # 构建完整的响应块
+    chunk = ChatCompletionChunk(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        created=timestamp,
+        model=model,
+        choices=[choice],
+        usage=ChatCompletionUsage(**usage) if usage else None
+    )
+    
+    return chunk.model_dump(exclude_none=True)
 
 
 def create_error_chunk(
@@ -144,11 +161,11 @@ def create_error_chunk(
     return f"data: {json.dumps(error_data)}\n\n"
 
 
-def convert_messages(messages: list[Message]) -> dict[str, Any]:
+def convert_messages(messages: list[Message]) -> ConvertedMessages:
     """转换消息格式为上游API所需格式。
 
     :param messages: 输入消息列表
-    :return: 包含转换后的消息、文件URL（包括图片和其他文件）和签名内容的字典
+    :return: 包含转换后的消息、文件URL（包括图片和其他文件）和签名内容的 Pydantic 模型
     """
     trans_messages = []
     file_urls = []
@@ -231,11 +248,11 @@ def convert_messages(messages: list[Message]) -> dict[str, Any]:
                     new_message["content"] = text_content
                 trans_messages.append(new_message)
 
-    return {
-        "messages": trans_messages,
-        "file_urls": file_urls,
-        "last_user_message_text": last_user_message_text
-    }
+    return ConvertedMessages(
+        messages=trans_messages,
+        file_urls=file_urls,
+        last_user_message_text=last_user_message_text
+    )
 
 
 def get_model_features(model: str, streaming: bool, model_capabilities: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -251,14 +268,8 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
     :param model_capabilities: 上游模型的能力配置（从模型列表中获取）
     :return: 包含特性和MCP服务器配置的字典
     """
-    features = {
-        "web_search": False,
-        "auto_web_search": False,
-        "preview_mode": False,
-        "flags": [],
-        "enable_thinking": True,
-    }
-
+    # 使用 Pydantic 模型构建特性配置
+    features = ModelFeatures()
     mcp_servers = []
     
     model_lower = model.lower()
@@ -270,11 +281,11 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
 
     # 处理 nothinking 后缀
     if has_nothinking_suffix:
-        features["enable_thinking"] = False
+        features.enable_thinking = False
         if settings.verbose_logging:
             logger.debug("Model feature detected: nothinking suffix disabled thinking for model={}", model)
     elif not streaming:
-        features["enable_thinking"] = False
+        features.enable_thinking = False
         if settings.verbose_logging:
             logger.debug("Thinking disabled for non-streaming request: model={}", model)
     else:
@@ -282,15 +293,15 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
         if model_capabilities:
             supports_thinking = model_capabilities.get("capabilities", {}).get("think", False)
             if not supports_thinking:
-                features["enable_thinking"] = False
+                features.enable_thinking = False
                 if settings.verbose_logging:
                     logger.debug("Thinking disabled: upstream model does not support thinking capability, model={}", model)
 
     # 处理 search 后缀
     if has_search_suffix:
-        features["web_search"] = True
-        features["auto_web_search"] = True
-        features["preview_mode"] = True
+        features.web_search = True
+        features.auto_web_search = True
+        features.preview_mode = True
         if settings.verbose_logging:
             logger.debug("Model feature detected: search suffix enabled for model={}", model)
         
@@ -299,7 +310,7 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
             if settings.verbose_logging:
                 logger.debug("Model feature detected: advanced-search suffix enabled MCP server for model={}", model)
 
-    return {"features": features, "mcp_servers": mcp_servers}
+    return {"features": features.model_dump(), "mcp_servers": mcp_servers}
 
 
 async def prepare_request_data(
@@ -331,7 +342,7 @@ async def prepare_request_data(
             str(e)
         )
     
-    convert_dict = convert_messages(chat_request.messages)
+    converted = convert_messages(chat_request.messages)
 
     # chat_id 应该在会话开始时生成一次，然后在整个会话中复用
     # 这里每次都生成新的ID是为了模拟新会话，实际应用中应该从请求中获取或维护会话状态
@@ -359,29 +370,22 @@ async def prepare_request_data(
             chat_request.model
         )
     
-    zai_data: dict[str, Any] = {
-        "stream": streaming,
-        "model": upstream_model_id,
-        "messages": convert_dict["messages"],
-        "signature_prompt": convert_dict.get("last_user_message_text", ""),
-        "params": {},
-        "files": [],
-        "mcp_servers": [],
-        "features": {},
-        "variables": {
+    zai_data = UpstreamRequestData(
+        stream=streaming,
+        model=upstream_model_id,
+        messages=converted.messages,
+        signature_prompt=converted.last_user_message_text,
+        variables={
             "{{CURRENT_DATETIME}}": datetime.now().isoformat(),
             "{{CURRENT_DATE}}": datetime.now().strftime("%Y-%m-%d"),
             "{{CURRENT_TIME}}": datetime.now().strftime("%H:%M:%S"),
             "{{CURRENT_WEEKDAY}}": datetime.now().strftime("%A"),
-            "{{CURRENT_TIMEZONE}}": "Asia/Shanghai", # 虚假的时区
-            "{{USER_LANGUAGE}}": "zh-CN", # 虚假的语言
+            "{{CURRENT_TIMEZONE}}": "Asia/Shanghai",
+            "{{USER_LANGUAGE}}": "zh-CN",
         },
-        "model_item": None,  # 初始化 model_item 字段
-        "background_tasks": {"title_generation": True, "tags_generation": True}, # 补充 background_tasks 字段
-        "stream_options": {"include_usage": True}, # 补充 stream_options 字段
-        "chat_id": chat_id,
-        "id": str(uuid.uuid4()),
-    }
+        chat_id=chat_id,
+        id=str(uuid.uuid4()),
+    )
 
     # 查找匹配的模型并提取完整的模型信息
     model_found = False
@@ -389,7 +393,7 @@ async def prepare_request_data(
     for model in models:
         if model["id"] == chat_request.model:
             # 使用完整的模型对象，包含所有字段
-            zai_data["model_item"] = model
+            zai_data.model_item = model
             # 提取模型能力配置用于特性判断
             model_capabilities = model.get("info", {}).get("meta", {}).get("capabilities", {})
             model_found = True
@@ -397,7 +401,7 @@ async def prepare_request_data(
     
     # 如果没有找到模型，使用上游模型ID构造一个基本的model_item
     if not model_found:
-        zai_data["model_item"] = {
+        zai_data.model_item = {
             "id": upstream_model_id,
             "name": upstream_model_id,
             "owned_by": "openai",
@@ -417,27 +421,27 @@ async def prepare_request_data(
 
     # 添加生成参数 (仅传递 ChatRequest 中存在的参数)
     if chat_request.temperature is not None:
-        zai_data["params"]["temperature"] = chat_request.temperature
+        zai_data.params["temperature"] = chat_request.temperature
     if chat_request.top_p is not None:
-        zai_data["params"]["top_p"] = chat_request.top_p
+        zai_data.params["top_p"] = chat_request.top_p
     if chat_request.max_tokens is not None:
-        zai_data["params"]["max_tokens"] = chat_request.max_tokens
+        zai_data.params["max_tokens"] = chat_request.max_tokens
 
-    signature_content = convert_dict.get("last_user_message_text", "")
+    signature_content = converted.last_user_message_text
 
     uploaded_file_objects = []  # 存储上传成功的完整文件对象
 
-    if convert_dict.get("file_urls"):
-        file_urls = convert_dict.get("file_urls", [])
+    if converted.file_urls:
+        file_urls = converted.file_urls
         logger.info(
             "File upload processing started: file_count={}, model={}, chat_id={}, request_id={}",
             len(file_urls),
             chat_request.model,
-            zai_data["chat_id"],
-            zai_data["id"],
+            zai_data.chat_id,
+            zai_data.id,
         )
         
-        file_uploader = FileUploader(auth_token, zai_data["chat_id"], cookies)
+        file_uploader = FileUploader(auth_token, zai_data.chat_id, cookies)
         
         for idx, url in enumerate(file_urls):
             try:
@@ -454,7 +458,7 @@ async def prepare_request_data(
                     len(file_urls),
                     url_type,
                     url[:80] if len(url) > 80 else url,
-                    zai_data["id"],
+                    zai_data.id,
                 )
                 
                 file_object = None
@@ -506,7 +510,7 @@ async def prepare_request_data(
                         len(file_urls),
                         file_object["id"],
                         file_object["media"],
-                        zai_data["id"],
+                        zai_data.id,
                     )
                 else:
                     logger.warning(
@@ -514,7 +518,7 @@ async def prepare_request_data(
                         idx + 1,
                         len(file_urls),
                         url[:80] if len(url) > 80 else url,
-                        zai_data["id"],
+                        zai_data.id,
                     )
             except Exception as e:
                 logger.error(
@@ -523,7 +527,7 @@ async def prepare_request_data(
                     len(file_urls),
                     url[:80] if len(url) > 80 else url,
                     str(e),
-                    zai_data["id"],
+                    zai_data.id,
                 )
 
         if uploaded_file_objects:
@@ -533,14 +537,14 @@ async def prepare_request_data(
                 len(uploaded_file_objects),
                 len(file_urls) - len(uploaded_file_objects),
                 chat_request.model,
-                zai_data["id"],
+                zai_data.id,
             )
         else:
             logger.warning(
                 "No files uploaded successfully: total_files={}, model={}, request_id={}",
                 len(file_urls),
                 chat_request.model,
-                zai_data["id"],
+                zai_data.id,
             )
         
         # 根据文档逻辑：根据media类型区分处理
@@ -557,15 +561,15 @@ async def prepare_request_data(
                 other_files.append(file_obj)
         
         # 处理最后一条用户消息
-        if uploaded_file_objects and zai_data["messages"]:
+        if uploaded_file_objects and zai_data.messages:
             last_user_msg_idx = -1
-            for i in range(len(zai_data["messages"]) - 1, -1, -1):
-                if zai_data["messages"][i].get("role") == "user":
+            for i in range(len(zai_data.messages) - 1, -1, -1):
+                if zai_data.messages[i].get("role") == "user":
                     last_user_msg_idx = i
                     break
             
             if last_user_msg_idx >= 0:
-                last_msg = zai_data["messages"][last_user_msg_idx]
+                last_msg = zai_data.messages[last_user_msg_idx]
                 text_content = last_msg.get("content", "")
                 
                 # 如果有图片或视频，构建content数组
@@ -584,7 +588,7 @@ async def prepare_request_data(
                                 "video_url": {"url": f"{file_obj['id']}_{file_obj['name']}"}
                             })
                     
-                    zai_data["messages"][last_user_msg_idx] = {
+                    zai_data.messages[last_user_msg_idx] = {
                         "role": "user",
                         "content": content_array
                     }
@@ -594,69 +598,39 @@ async def prepare_request_data(
                         len(text_content),
                         sum(1 for f in image_video_files if f["media"] == "image"),
                         sum(1 for f in image_video_files if f["media"] == "video"),
-                        zai_data["id"],
+                        zai_data.id,
                     )
         
         # 只有非图片/视频文件才放入顶层files数组
         if other_files:
-            zai_data["files"] = other_files
+            zai_data.files = other_files
             logger.info(
                 "Non-media files added to top-level files array: count={}, request_id={}",
                 len(other_files),
-                zai_data["id"],
+                zai_data.id,
             )
 
     # 获取模型特性配置，传入模型能力信息
     features_dict = get_model_features(chat_request.model, streaming, model_capabilities)
-    zai_data["features"] = features_dict["features"]
+    zai_data.features = features_dict["features"]
     if features_dict["mcp_servers"]:
-        zai_data["mcp_servers"] = features_dict["mcp_servers"]
+        zai_data.mcp_servers = features_dict["mcp_servers"]
 
-    # 构造查询参数
-    params = {
-        "requestId": str(uuid.uuid4()),
-        "timestamp": str(int(time.time() * 1000)),
-        "user_id": user_id,
-        "token": auth_token, # JWT token
-        "version": settings.HEADERS["X-FE-Version"], # 前端应用版本号
-        "user_agent": settings.HEADERS["User-Agent"],
-        "platform": "web", # 客户端平台
-        "language": "zh-CN",
-        "languages": "zh-CN",
+    # 使用 Pydantic 模型构造查询参数
+    params = UpstreamRequestParams(
+        requestId=str(uuid.uuid4()),
+        timestamp=str(int(time.time() * 1000)),
+        user_id=user_id,
+        token=auth_token,
+        version=settings.HEADERS["X-FE-Version"],
+        user_agent=settings.HEADERS["User-Agent"],
+    )
 
-        "timezone": "Asia/Shanghai",
-        "cookie_enabled": "true", # 暂时硬编码
-        "browser_name": "Chrome", # 模拟 Chrome
-        "os_name": "Windows", # 模拟 Windows
-        "screen_width": "1920", # 占位符
-        "screen_height": "1080", # 占位符
-        "screen_resolution": "1920x1080", # 占位符
-        "viewport_width": "1920", # 占位符
-        "viewport_height": "1080", # 占位符
-        "viewport_size": "1920x1080", # 占位符
-        "color_depth": "24", # 占位符
-        "pixel_ratio": "1", # 占位符
-        "is_mobile": "false", # 占位符
-        "is_touch": "false", # 占位符
-        "max_touch_points": "0", # 占位符
-
-
-        "hash": "", # 占位符
-        "host": "chat.z.ai", # 占位符
-        "hostname": "chat.z.ai", # 占位符
-        "protocol": "https", # 占位符
-        "referrer": "", # 占位符
-        "title": "Z.ai Chat", # 占位符
-        "timezone_offset": "-480", # 占位符
-        "local_time": datetime.now().isoformat(),
-        "utc_time": datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S GMT"),
-    }
-
-    request_params = f"requestId,{params['requestId']},timestamp,{params['timestamp']},user_id,{params['user_id']}"
+    request_params = f"requestId,{params.requestId},timestamp,{params.timestamp},user_id,{params.user_id}"
     signature_data = generate_signature(request_params, signature_content)
-    params["signature_timestamp"] = str(signature_data["timestamp"])
+    params.signature_timestamp = str(signature_data["timestamp"])
 
-    zai_data["signature_prompt"] = signature_content
+    zai_data.signature_prompt = signature_content
 
     headers = settings.HEADERS.copy()
     headers["Authorization"] = f"Bearer {auth_token}"
@@ -665,19 +639,19 @@ async def prepare_request_data(
     headers["X-FE-Version"] = settings.HEADERS["X-FE-Version"] # 前端版本号
     headers["Referer"] = f"{settings.protocol}//{settings.base_url}/c/{chat_id}"
 
-    files_processed = bool(convert_dict.get("file_urls"))
+    files_processed = bool(converted.file_urls)
     logger.info(
         "Request data prepared successfully: chat_id={}, request_id={}, model={}, upstream_model={}, streaming={}, files_processed={}, features={}",
-        zai_data["chat_id"],
-        params["requestId"],
+        zai_data.chat_id,
+        params.requestId,
         chat_request.model,
-        zai_data["model"],
+        zai_data.model,
         streaming,
         files_processed,
-        zai_data["features"],
+        zai_data.features,
     )
 
-    return zai_data, params, headers
+    return zai_data.model_dump(), params.model_dump(), headers
 
 
 async def process_streaming_response(
@@ -1094,17 +1068,16 @@ async def process_non_streaming_response(
                 "unknown_error"
             )
 
-    return {
-        "id": f"chatcmpl-{uuid.uuid4()}",
-        "object": "chat.completion",
-        "created": int(datetime.now().timestamp()),
-        "model": chat_request.model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": full_response},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": usage,
-    }
+    # 使用 Pydantic 模型构建响应
+    message = ChatCompletionMessage(role="assistant", content=full_response)
+    choice = ChatCompletionChoice(index=0, message=message, finish_reason="stop")
+    
+    response = ChatCompletionResponse(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        created=int(datetime.now().timestamp()),
+        model=chat_request.model,
+        choices=[choice],
+        usage=ChatCompletionUsage(**usage) if usage else None
+    )
+    
+    return response.model_dump(exclude_none=True)
