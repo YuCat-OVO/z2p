@@ -44,216 +44,210 @@ class UpstreamCapability(BaseModel):
     """上游模型能力配置。
     
     定义模型支持的各种功能特性，用于前端 UI 展示和功能开关。
+    这是一个动态的键值对字典，不同模型可能有不同的能力字段。
     
-    :ivar vision: 是否支持视觉能力（图像理解）
-    :ivar citations: 是否支持引用来源
-    :ivar preview_mode: 是否支持预览模式
-    :ivar web_search: 是否支持网络搜索
-    :ivar language_detection: 是否支持语言检测
-    :ivar restore_n_source: 是否支持恢复源内容
-    :ivar mcp: 是否支持 MCP（Model Context Protocol）工具调用
-    :ivar file_qa: 是否支持文件问答
-    :ivar returnFc: 是否返回函数调用信息
-    :ivar returnThink: 是否返回思考过程
-    :ivar think: 是否支持深度思考（思维链）
+    常见的能力字段包括：
+    - vision: 视觉能力（图像理解）
+    - web_search: 网络搜索
+    - mcp: MCP 工具调用
+    - file_qa: 文件问答
+    - think: 深度思考（思维链）
+    - citations: 引用来源
+    - returnFc: 返回函数调用
+    - returnThink: 返回思考过程
+    
+    注意：Pydantic 的 model_config 允许额外字段，以支持未来可能添加的新能力。
     """
-    vision: bool = False
-    citations: bool = False
-    preview_mode: bool = False
-    web_search: bool = False
-    language_detection: bool = False
-    restore_n_source: bool = False
-    mcp: bool = False
-    file_qa: bool = False
-    returnFc: bool = False
-    returnThink: bool = False
-    think: bool = False
+    model_config = {"extra": "allow"}  # 允许额外的未定义字段
+    
+    # 定义已知的常见能力字段（带默认值）
+    vision: bool = Field(default=False, description="视觉能力：支持图像理解和分析（如 GLM-4.5V）")
+    citations: bool = Field(default=False, description="引用来源：在回答中提供信息来源引用")
+    preview_mode: bool = Field(default=False, description="预览模式：支持预览功能")
+    web_search: bool = Field(default=False, description="网络搜索：可联网搜索实时信息（生成 -search 变体）")
+    language_detection: bool = Field(default=False, description="语言检测：自动检测输入语言")
+    restore_n_source: bool = Field(default=False, description="恢复源内容：支持恢复原始内容")
+    mcp: bool = Field(default=False, description="MCP 工具：支持 Model Context Protocol 工具调用（生成 -mcp 变体）")
+    file_qa: bool = Field(default=False, description="文件问答：支持上传文件并进行问答（生成 -fileqa 变体）")
+    returnFc: bool = Field(default=False, description="返回函数调用：在响应中包含函数调用信息")
+    returnThink: bool = Field(default=False, description="返回思考过程：在响应中包含模型的思考过程")
+    think: bool = Field(default=False, description="深度思考：支持思维链推理（生成 -nothinking 变体用于禁用）")
 
 
 class UpstreamFeature(BaseModel):
     """上游功能特性配置。
     
-    用于 suggestion_prompts 中定义特定功能的状态。
-    
-    :ivar type: 功能类型（如 "mcp", "web_search", "tool_selector"）
-    :ivar server: 服务器标识（如 "vibe-coding", "ppt-maker"）
-    :ivar status: 功能状态（"hidden", "selected", "pinned"）
+    用于 suggestion_prompts 中定义特定功能的 UI 展示状态。
     """
-    type: str
-    server: str
-    status: str
+    type: str = Field(..., description="功能类型：mcp（工具）、web_search（搜索）、tool_selector（工具选择器）")
+    server: str = Field(..., description="服务器标识：如 vibe-coding（编程）、ppt-maker（PPT）、deep-research（深度研究）")
+    status: str = Field(..., description="UI 状态：hidden（隐藏）、selected（已选）、pinned（固定显示）")
 
 
 class UpstreamPromptRemixId(BaseModel):
-    """上游提示词混音ID。
+    """上游提示词混音 ID。
     
-    用于关联分享和源提示词的ID。
-    
-    :ivar zh_CN: 中文版本的ID（可能是字符串或对象）
-    :ivar en_US: 英文版本的ID
+    用于关联分享和源提示词的 ID，支持多语言版本。
     """
-    zh_CN: Optional[Union[str, Dict[str, Any]]] = Field(alias="zh-CN", default=None)
-    en_US: Optional[str] = Field(alias="en-US", default=None)
+    zh_CN: Optional[Union[str, Dict[str, Any]]] = Field(
+        alias="zh-CN",
+        default=None,
+        description="中文版本的分享或源 ID"
+    )
+    en_US: Optional[str] = Field(
+        alias="en-US",
+        default=None,
+        description="英文版本的分享或源 ID"
+    )
 
 
 class UpstreamPrompt(BaseModel):
     """上游提示词配置。
     
-    定义建议提示词的详细信息，用于前端 UI 展示。
-    
-    :ivar id: 提示词唯一标识
-    :ivar name: 提示词中文名称
-    :ivar name_en: 提示词英文名称
-    :ivar prompt: 提示词中文内容
-    :ivar prompt_en: 提示词英文内容
-    :ivar thumb: 缩略图（可以是 URL 字符串或包含多语言 URL 的字典）
-    :ivar files: 关联的文件列表
-    :ivar remix: 混音信息（分享和源ID）
+    定义建议提示词的详细信息，用于前端 UI 展示和快速启动对话。
     """
-    id: Optional[str] = None
-    name: str
-    name_en: str
-    prompt: str
-    prompt_en: str
-    thumb: Optional[Union[str, Dict[str, str]]] = None
-    files: Optional[List[Dict[str, Any]]] = None
-    remix: Optional[Dict[str, UpstreamPromptRemixId]] = None
+    id: Optional[str] = Field(default=None, description="提示词唯一标识")
+    name: str = Field(..., description="提示词中文名称（如：赛博功德+1）")
+    name_en: str = Field(..., description="提示词英文名称")
+    prompt: str = Field(..., description="提示词中文内容（实际发送给模型的文本）")
+    prompt_en: str = Field(..., description="提示词英文内容")
+    thumb: Optional[Union[str, Dict[str, str]]] = Field(
+        default=None,
+        description="缩略图：可以是 URL 字符串或包含 zh-CN/en-US 键的字典"
+    )
+    files: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="关联的文件列表（用于多模态输入）"
+    )
+    remix: Optional[Dict[str, UpstreamPromptRemixId]] = Field(
+        default=None,
+        description="混音信息：包含 share_id 和 source_id"
+    )
 
 
 class UpstreamSuggestionPrompt(BaseModel):
     """上游建议提示词组配置。
     
     定义一组相关的建议提示词，用于前端 UI 分组展示。
-    
-    :ivar id: 提示词组唯一标识
-    :ivar group_name: 提示词组中文名称
-    :ivar group_name_en: 提示词组英文名称
-    :ivar icon: 提示词组图标（SVG 字符串）
-    :ivar prompts: 提示词列表
-    :ivar flags: 功能标志列表（如 "ppt_composer", "web_dev"）
-    :ivar features: 功能特性配置列表
-    :ivar display_name: 显示名称
-    :ivar tag: 中文标签（如 "🔥"）
-    :ivar tag_en: 英文标签
-    :ivar media: 是否包含媒体内容
-    :ivar gallery: 是否在画廊中展示
-    :ivar hidden: 是否隐藏
+    例如：AI PPT、全栈开发、灵感画板、深度研究等场景。
     """
-    id: Optional[str] = None
-    group_name: str
-    group_name_en: Optional[str] = None
-    icon: Optional[str] = None
-    prompts: Optional[List[UpstreamPrompt]] = None
-    flags: Optional[List[str]] = None
-    features: Optional[List[UpstreamFeature]] = None
-    display_name: Optional[str] = None
-    tag: Optional[str] = None
-    tag_en: Optional[str] = None
-    media: Optional[bool] = None
-    gallery: Optional[bool] = None
-    hidden: Optional[bool] = None
+    id: Optional[str] = Field(default=None, description="提示词组唯一标识")
+    group_name: str = Field(..., description="提示词组中文名称（如：AI PPT、全栈开发）")
+    group_name_en: Optional[str] = Field(default=None, description="提示词组英文名称")
+    icon: Optional[str] = Field(default=None, description="提示词组图标（SVG 字符串）")
+    prompts: Optional[List[UpstreamPrompt]] = Field(default=None, description="该组包含的提示词列表")
+    flags: Optional[List[str]] = Field(
+        default=None,
+        description="功能标志：ppt_composer（PPT生成）、web_dev（网页开发）、ai_design（AI设计）、deep_research（深度研究）"
+    )
+    features: Optional[List[UpstreamFeature]] = Field(
+        default=None,
+        description="功能特性配置：定义该组启用的工具和搜索功能"
+    )
+    display_name: Optional[str] = Field(default=None, description="显示名称（用于 UI）")
+    tag: Optional[str] = Field(default=None, description="中文标签（如 🔥 表示热门）")
+    tag_en: Optional[str] = Field(default=None, description="英文标签")
+    media: Optional[bool] = Field(default=None, description="是否包含媒体内容（图片、视频等）")
+    gallery: Optional[bool] = Field(default=None, description="是否在画廊中展示")
+    hidden: Optional[bool] = Field(default=None, description="是否隐藏该提示词组")
 
 
 class UpstreamMeta(BaseModel):
     """上游模型元数据。
     
-    包含模型的 UI 显示和功能相关信息。
-    
-    :ivar profile_image_url: 模型头像 URL
-    :ivar description: 模型描述（根据 Accept-Language 本地化）
-    :ivar capabilities: 模型能力配置
-    :ivar mcpServerIds: 兼容的 MCP 服务器 ID 列表
-    :ivar suggestion_prompts: 建议提示词组列表
-    :ivar tags: 模型标签列表（如 [{"name": "NEW"}]）
-    :ivar hidden: 是否隐藏此模型
+    包含模型的 UI 显示、功能配置和建议提示词等信息。
     """
-    profile_image_url: Optional[str] = None
-    description: Optional[str] = None
-    capabilities: Optional[UpstreamCapability] = None
-    mcpServerIds: Optional[List[str]] = None
-    suggestion_prompts: Optional[List[UpstreamSuggestionPrompt]] = None
-    tags: Optional[List[Dict[str, str]]] = None
-    hidden: Optional[bool] = None
+    profile_image_url: Optional[str] = Field(
+        default=None,
+        description="模型头像 URL（通常为 /static/favicon.png）"
+    )
+    description: Optional[str] = Field(
+        default=None,
+        description="模型描述（根据 Accept-Language 本地化，如：Most advanced model, excelling in all-round tasks）"
+    )
+    capabilities: Optional[UpstreamCapability] = Field(
+        default=None,
+        description="模型能力配置：定义支持的功能（vision、web_search、mcp、think 等）"
+    )
+    mcpServerIds: Optional[List[str]] = Field(
+        default=None,
+        description="兼容的 MCP 服务器 ID 列表（如：deep-web-search、ppt-maker、vibe-coding）"
+    )
+    suggestion_prompts: Optional[List[UpstreamSuggestionPrompt]] = Field(
+        default=None,
+        description="建议提示词组列表：为该模型推荐的使用场景和示例"
+    )
+    tags: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="模型标签列表（如 [{'name': 'NEW'}] 表示新模型）"
+    )
+    hidden: Optional[bool] = Field(
+        default=None,
+        description="是否隐藏此模型（隐藏的模型不在前端显示）"
+    )
 
 
 class UpstreamModelInfo(BaseModel):
     """上游模型详细信息。
     
-    包含模型的所有详细元数据。
-    
-    :ivar id: 模型唯一标识符
-    :ivar user_id: 创建者用户 ID
-    :ivar base_model_id: 基础模型 ID（如果是微调模型）
-    :ivar name: 模型名称
-    :ivar params: 模型默认参数（如 max_tokens, temperature）
-    :ivar meta: 模型元数据
-    :ivar access_control: 访问控制配置
-    :ivar is_active: 模型是否激活
-    :ivar updated_at: 更新时间戳
-    :ivar created_at: 创建时间戳
+    包含模型的所有详细元数据和配置信息。
     """
-    id: str
-    user_id: Optional[str] = None
-    base_model_id: Optional[str] = None
-    name: str
-    params: Optional[Dict[str, Any]] = None
-    meta: Optional[UpstreamMeta] = None
-    access_control: Optional[Any] = None
-    is_active: bool = True
-    updated_at: Optional[int] = None
-    created_at: Optional[int] = None
+    id: str = Field(..., description="模型唯一标识符（如：GLM-4-6-API-V1）")
+    user_id: Optional[str] = Field(default=None, description="创建者用户 ID")
+    base_model_id: Optional[str] = Field(default=None, description="基础模型 ID（用于微调模型）")
+    name: str = Field(..., description="模型名称（如：GLM-4.6）")
+    params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="模型默认参数：max_tokens（最大令牌数）、temperature（温度）、top_p（核采样）"
+    )
+    meta: Optional[UpstreamMeta] = Field(
+        default=None,
+        description="模型元数据：包含能力、描述、建议提示词等"
+    )
+    access_control: Optional[Any] = Field(default=None, description="访问控制配置")
+    is_active: bool = Field(default=True, description="模型是否激活（仅激活的模型会被转换）")
+    updated_at: Optional[int] = Field(default=None, description="更新时间戳（Unix 时间）")
+    created_at: Optional[int] = Field(default=None, description="创建时间戳（Unix 时间）")
 
 
 class UpstreamOpenAI(BaseModel):
-    """上游 OpenAI 配置。
+    """上游 OpenAI 兼容配置。
     
-    包含 OpenAI 兼容的配置信息。
-    
-    :ivar id: OpenAI 模型 ID
-    :ivar name: OpenAI 模型名称
-    :ivar owned_by: 所有者标识
-    :ivar openai: 嵌套的 OpenAI 配置
-    :ivar urlIdx: URL 索引（用于负载均衡）
+    包含 OpenAI 格式的配置信息（用于兼容性）。
     """
-    id: str
-    name: str
-    owned_by: str
-    openai: Dict[str, str]
-    urlIdx: int
+    id: str = Field(..., description="OpenAI 格式的模型 ID")
+    name: str = Field(..., description="OpenAI 格式的模型名称")
+    owned_by: str = Field(..., description="所有者标识（通常为 openai）")
+    openai: Dict[str, str] = Field(..., description="嵌套的 OpenAI 配置（包含 id）")
+    urlIdx: int = Field(..., description="URL 索引（用于负载均衡和多端点路由）")
 
 
 class UpstreamModel(BaseModel):
     """上游模型定义。
     
-    表示从上游 API 返回的完整模型对象。
-    
-    :ivar id: 模型唯一标识符
-    :ivar name: 模型用户友好显示名称
-    :ivar owned_by: 模型所有者或提供商标识
-    :ivar openai: OpenAI 兼容配置
-    :ivar urlIdx: URL 索引
-    :ivar info: 模型详细信息
-    :ivar actions: 可用操作列表
-    :ivar tags: 模型标签列表
+    表示从上游 API `/api/models` 端点返回的完整模型对象。
+    包含模型的所有信息：基本信息、能力配置、建议提示词等。
     """
-    id: str
-    name: str
-    owned_by: str
-    openai: UpstreamOpenAI
-    urlIdx: int
-    info: UpstreamModelInfo
-    actions: List[Any] = []
-    tags: List[Dict[str, str]] = []
+    id: str = Field(..., description="模型唯一标识符（如：GLM-4-6-API-V1、glm-4.5v）")
+    name: str = Field(..., description="模型用户友好显示名称（如：GLM-4.6、GLM-4.5V）")
+    owned_by: str = Field(..., description="模型所有者或提供商标识（通常为 openai）")
+    openai: UpstreamOpenAI = Field(..., description="OpenAI 兼容配置")
+    urlIdx: int = Field(..., description="URL 索引（用于负载均衡）")
+    info: UpstreamModelInfo = Field(..., description="模型详细信息：包含能力、参数、元数据等")
+    actions: List[Any] = Field(default_factory=list, description="可用操作列表（通常为空）")
+    tags: List[Dict[str, str]] = Field(
+        default_factory=list,
+        description="模型标签列表（如 [{'name': 'NEW'}]）"
+    )
 
 
 class UpstreamModelsResponse(BaseModel):
     """上游模型列表响应。
     
     表示从上游 API `/api/models` 端点返回的完整响应。
-    
-    :ivar data: 模型对象列表
+    包含所有可用模型的列表。
     """
-    data: List[UpstreamModel]
+    data: List[UpstreamModel] = Field(..., description="模型对象列表（包含所有可用模型）")
 
 
 # --- Downstream Models (下游 OpenAI 兼容模型) ---
@@ -264,17 +258,30 @@ class DownstreamModel(BaseModel):
     符合 OpenAI API 规范的简化模型对象，用于 `/v1/models` 端点。
     参考：https://platform.openai.com/docs/api-reference/models/object
     
-    :ivar id: 模型唯一标识符
-    :ivar object: 对象类型，固定为 "model"
-    :ivar created: 模型创建时间戳（Unix 时间）
-    :ivar name: 模型显示名称
-    :ivar owned_by: 模型所有者，默认为 "z.ai"
+    本转换程序会为每个上游模型生成：
+    - 基础模型（如：glm-4.6）
+    - 功能变体（如：glm-4.6-nothinking、glm-4.6-search、glm-4.6-mcp）
     """
-    id: str = Field(..., description="模型唯一标识符")
-    object: str = Field(default="model", description="对象类型")
-    created: int = Field(..., description="创建时间戳")
-    name: str = Field(..., description="模型显示名称")
-    owned_by: str = Field(default="z.ai", description="模型所有者")
+    id: str = Field(
+        ...,
+        description="模型唯一标识符（如：glm-4.6、glm-4.6-nothinking、glm-4.6-search）"
+    )
+    object: str = Field(
+        default="model",
+        description="对象类型（固定为 model，符合 OpenAI 规范）"
+    )
+    created: int = Field(
+        ...,
+        description="模型创建时间戳（Unix 时间，从上游模型的 created_at 字段获取）"
+    )
+    name: str = Field(
+        ...,
+        description="模型显示名称（如：GLM-4.6、GLM-4.6-NOTHINKING、GLM-4.6-SEARCH）"
+    )
+    owned_by: str = Field(
+        default="z.ai",
+        description="模型所有者（默认为 z.ai，表示本转换服务）"
+    )
 
 
 class DownstreamModelsResponse(BaseModel):
@@ -283,8 +290,14 @@ class DownstreamModelsResponse(BaseModel):
     符合 OpenAI API 规范的模型列表响应，用于 `/v1/models` 端点。
     参考：https://platform.openai.com/docs/api-reference/models/list
     
-    :ivar object: 对象类型，固定为 "list"
-    :ivar data: 模型对象列表
+    本转换程序将上游的非标准模型列表转换为标准 OpenAI 格式，
+    并为已映射的模型自动生成功能变体（-nothinking、-search、-mcp 等）。
     """
-    object: str = Field(default="list", description="对象类型")
-    data: List[DownstreamModel] = Field(..., description="模型列表")
+    object: str = Field(
+        default="list",
+        description="对象类型（固定为 list，符合 OpenAI 规范）"
+    )
+    data: List[DownstreamModel] = Field(
+        ...,
+        description="模型列表（包含基础模型和所有生成的功能变体）"
+    )
