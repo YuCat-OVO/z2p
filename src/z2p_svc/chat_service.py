@@ -8,7 +8,7 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -126,7 +126,7 @@ def create_error_chunk(
     error_data = {
         "id": f"chatcmpl-{uuid.uuid4()}",
         "object": "chat.completion.chunk",
-        "created": int(datetime.now().timestamp()),
+        "created": int(datetime.now(UTC).timestamp()),
         "model": model,
         "choices": [
             {
@@ -307,7 +307,6 @@ async def prepare_request_data(
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """准备上游API请求数据。
 
-    :param fastapi_request: FastAPI请求对象，用于获取客户端信息
     :param chat_request: 聊天请求对象
     :param access_token: 访问令牌
     :param streaming: 是否为流式请求
@@ -416,13 +415,13 @@ async def prepare_request_data(
             upstream_model_id
         )
 
-    # # 添加生成参数 (仅传递 ChatRequest 中存在的参数)
-    # if chat_request.temperature is not None:
-    #     zai_data["params"]["temperature"] = chat_request.temperature
-    # if chat_request.top_p is not None:
-    #     zai_data["params"]["top_p"] = chat_request.top_p
-    # if chat_request.max_tokens is not None:
-    #     zai_data["params"]["max_tokens"] = chat_request.max_tokens
+    # 添加生成参数 (仅传递 ChatRequest 中存在的参数)
+    if chat_request.temperature is not None:
+        zai_data["params"]["temperature"] = chat_request.temperature
+    if chat_request.top_p is not None:
+        zai_data["params"]["top_p"] = chat_request.top_p
+    if chat_request.max_tokens is not None:
+        zai_data["params"]["max_tokens"] = chat_request.max_tokens
 
     signature_content = convert_dict.get("last_user_message_text", "")
 
@@ -620,7 +619,7 @@ async def prepare_request_data(
         "user_id": user_id,
         "token": auth_token, # JWT token
         "version": settings.HEADERS["X-FE-Version"], # 前端应用版本号
-        "user_agent": settings.HEADERS["User-Agent"], # 前端应用版本号
+        "user_agent": settings.HEADERS["User-Agent"],
         "platform": "web", # 客户端平台
         "language": "zh-CN",
         "languages": "zh-CN",
@@ -650,7 +649,7 @@ async def prepare_request_data(
         "title": "Z.ai Chat", # 占位符
         "timezone_offset": "-480", # 占位符
         "local_time": datetime.now().isoformat(),
-        "utc_time": datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT"),
+        "utc_time": datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S GMT"),
     }
 
     request_params = f"requestId,{params['requestId']},timestamp,{params['timestamp']},user_id,{params['user_id']}"
@@ -686,7 +685,6 @@ async def process_streaming_response(
 ) -> AsyncGenerator[str, None]:
     """处理流式响应。
 
-    :param fastapi_request: FastAPI请求对象，用于获取客户端信息
     :param chat_request: 聊天请求对象
     :param access_token: 访问令牌
     :yields: SSE格式的数据块
@@ -911,7 +909,6 @@ async def process_non_streaming_response(
 ) -> dict[str, Any]:
     """处理非流式响应。
 
-    :param fastapi_request: FastAPI请求对象，用于获取客户端信息
     :param chat_request: 聊天请求对象
     :param access_token: 访问令牌
     :return: 完整的聊天补全响应
