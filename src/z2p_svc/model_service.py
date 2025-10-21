@@ -68,22 +68,8 @@ def format_model_name(name: str) -> str:
     if not name:
         return ""
     
-    parts = name.split('-')
-    if len(parts) == 1:
-        return parts[0].upper()
-    
-    formatted = [parts[0].upper()]
-    for p in parts[1:]:
-        if not p:
-            formatted.append("")
-        elif p.isdigit():
-            formatted.append(p)
-        elif any(c.isalpha() for c in p):
-            formatted.append(p.capitalize())
-        else:
-            formatted.append(p)
-    
-    return "-".join(formatted)
+    # 简单转大写即可，保持原有的连字符和点号结构
+    return name.upper()
 
 
 def get_model_name(source_id: str, model_name: str) -> str:
