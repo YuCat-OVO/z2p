@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28.1",
     "loguru>=0.7.3",
     "pydantic-settings>=2.7.0",
+    "python-multipart>=0.0.20",
     "stamina>=25.1.0",
 ]
 
