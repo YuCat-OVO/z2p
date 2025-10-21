@@ -6,16 +6,55 @@
 
 import httpx
 import stamina
-from typing import Any
+from typing import Any, Dict, List
 from datetime import datetime
 
 from .config import get_settings
 from .logger import get_logger
+from .models import (
+    UpstreamModelsResponse,
+    UpstreamModel,
+    DownstreamModelsResponse,
+    DownstreamModel,
+    DownstreamMeta,
+    DownstreamCapability,
+)
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 _models_cache: dict[str, Any] | None = None
+
+# 定义所有可能的功能开关及其尾缀和描述
+# 这里的键名应与 UpstreamCapability 中的字段名一致
+FEATURE_SWITCHES: Dict[str, Dict[str, Any]] = {
+    "think": {
+        "suffix": "-nothinking",
+        "name_suffix": "-NOTHINKING",
+        "description_suffix": "(禁用深度思考)",
+        "negate": True
+    },
+    "web_search": {
+        "suffix": "-search",
+        "name_suffix": "-SEARCH",
+        "description_suffix": "(启用网络搜索)"
+    },
+    "mcp": {
+        "suffix": "-mcp",
+        "name_suffix": "-MCP",
+        "description_suffix": "(启用MCP工具)"
+    },
+    "vision": {
+        "suffix": "-vision",
+        "name_suffix": "-VISION",
+        "description_suffix": "(启用视觉能力)"
+    },
+    "file_qa": {
+        "suffix": "-fileqa",
+        "name_suffix": "-FILEQA",
+        "description_suffix": "(启用文件问答)"
+    },
+}
 
 
 def format_model_name(name: str) -> str:
@@ -164,7 +203,9 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     - 基础模型：原始模型ID
     - nothinking变体：禁用深度思考
     - search变体：启用网络搜索
-    - advanced-search变体：启用高级搜索
+    - mcp变体：启用MCP工具
+    - vision变体：启用视觉能力
+    - fileqa变体：启用文件问答
     
     :param access_token: 可选的访问令牌
     :param use_cache: 是否使用缓存
@@ -179,19 +220,21 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     
     logger.info("Fetching fresh models from upstream: use_cache={}", use_cache)
     
-    upstream_data = await fetch_models_from_upstream(access_token)
+    upstream_raw_data = await fetch_models_from_upstream(access_token)
+    upstream_data = UpstreamModelsResponse.model_validate(upstream_raw_data)
     
     default_logo = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2030%2030%22%20style%3D%22background%3A%232D2D2D%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M15.47%207.1l-1.3%201.85c-.2.29-.54.47-.9.47h-7.1V7.09c0%20.01%209.31.01%209.31.01z%22%2F%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M24.3%207.1L13.14%2022.91H5.7l11.16-15.81z%22%2F%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M14.53%2022.91l1.31-1.86c.2-.29.54-.47.9-.47h7.09v2.33h-9.3z%22%2F%3E%3C%2Fsvg%3E"
     
-    models = []
-    for m in upstream_data.get("data", []):
-        if not m.get("info", {}).get("is_active", True):
+    downstream_models: List[DownstreamModel] = []
+    
+    for m in upstream_data.data:
+        if not m.info.is_active:
             continue
         
-        source_id = m.get("id")
-        source_name = m.get("name")
-        model_info = m.get("info", {})
-        model_meta = model_info.get("meta", {})
+        source_id = m.id
+        source_name = m.name
+        model_info = m.info
+        model_meta = model_info.meta
         
         processed_name = get_model_name(source_id, source_name)
         processed_id = get_model_id(source_id, processed_name)
@@ -213,140 +256,128 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
             processed_name
         )
         
-        model_meta_processed = {
-            "profile_image_url": default_logo,
-            "capabilities": model_meta.get("capabilities"),
-            "description": model_meta.get("description"),
-            "hidden": model_meta.get("hidden"),
-            "suggestion_prompts": [
-                {"content": item["prompt"]}
-                for item in (model_meta.get("suggestion_prompts") or [])
-                if isinstance(item, dict) and "prompt" in item
-            ]
-        }
+        # 提取并简化 suggestion_prompts
+        simplified_suggestion_prompts = []
+        if model_meta and model_meta.suggestion_prompts:
+            for sp in model_meta.suggestion_prompts:
+                if sp.prompts:
+                    for p in sp.prompts:
+                        simplified_suggestion_prompts.append({"content": p.prompt})
         
-        base_model = {
-            "id": processed_id,
-            "object": "model",
-            "name": processed_name,
-            "meta": model_meta_processed,
-            "info": {
-                "meta": model_meta_processed
-            },
-            "created": model_info.get("created_at", int(datetime.now().timestamp())),
-            "owned_by": "z.ai",
-            "original": {
-                "name": source_name,
-                "id": source_id,
-                "info": model_info
-            },
-        }
-        models.append(base_model)
+        base_capabilities = model_meta.capabilities.model_dump() if model_meta and model_meta.capabilities else {}
         
-        capabilities = model_meta.get("capabilities", {})
+        # 创建基础模型
+        base_downstream_model = DownstreamModel(
+            id=processed_id,
+            object="model",
+            name=processed_name,
+            created=model_info.created_at or int(datetime.now().timestamp()),
+            owned_by="z.ai",
+            meta=DownstreamMeta(
+                profile_image_url=(model_meta.profile_image_url if model_meta else None) or default_logo,
+                description=model_meta.description if model_meta else None,
+                capabilities=DownstreamCapability(**base_capabilities),
+                suggestion_prompts=simplified_suggestion_prompts,
+                hidden=model_meta.hidden if model_meta else None
+            ),
+            info=model_info.model_dump(),
+            original=m.model_dump()
+        )
+        downstream_models.append(base_downstream_model)
         
-        # 为支持深度思考的模型生成禁用思考的变体
-        if capabilities.get("think", False):
-            nothinking_id = f"{processed_id}-nothinking"
-            nothinking_name = f"{processed_name}-NOTHINKING"
-            
-            if nothinking_id not in settings.REVERSE_MODELS_MAPPING:
-                settings.REVERSE_MODELS_MAPPING[nothinking_id] = source_id
-                logger.info(
-                    "Added reverse mapping for variant: {} -> {}",
-                    nothinking_id,
-                    source_id
-                )
-            
-            models.append({
-                **base_model,
-                "id": nothinking_id,
-                "name": nothinking_name,
-                "meta": {
-                    **model_meta_processed,
-                    "description": f"{model_meta_processed.get('description', '')} (禁用深度思考)".strip()
-                },
-            })
-            logger.info(
-                "Generated nothinking variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}",
-                processed_id,
-                processed_name,
-                nothinking_id,
-                nothinking_name,
-                source_id
-            )
+        logger.info(
+            "Base model generated: id={}, name={}, upstream_id={}",
+            base_downstream_model.id,
+            base_downstream_model.name,
+            source_id
+        )
         
-        # 为支持网络搜索的模型生成搜索变体
-        if capabilities.get("web_search", False):
-            search_id = f"{processed_id}-search"
-            search_name = f"{processed_name}-SEARCH"
-            
-            if search_id not in settings.REVERSE_MODELS_MAPPING:
-                settings.REVERSE_MODELS_MAPPING[search_id] = source_id
-                logger.info(
-                    "Added reverse mapping for variant: {} -> {}",
-                    search_id,
-                    source_id
-                )
-            
-            models.append({
-                **base_model,
-                "id": search_id,
-                "name": search_name,
-                "meta": {
-                    **model_meta_processed,
-                    "description": f"{model_meta_processed.get('description', '')} (启用网络搜索)".strip()
-                },
-            })
-            logger.info(
-                "Generated search variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}",
-                processed_id,
-                processed_name,
-                search_id,
-                search_name,
-                source_id
-            )
-            
-            # 生成高级搜索变体（包含MCP服务器支持）
-            advanced_search_id = f"{processed_id}-advanced-search"
-            advanced_search_name = f"{processed_name}-ADVANCED-SEARCH"
-            
-            if advanced_search_id not in settings.REVERSE_MODELS_MAPPING:
-                settings.REVERSE_MODELS_MAPPING[advanced_search_id] = source_id
-                logger.info(
-                    "Added reverse mapping for variant: {} -> {}",
-                    advanced_search_id,
-                    source_id
-                )
-            
-            models.append({
-                **base_model,
-                "id": advanced_search_id,
-                "name": advanced_search_name,
-                "meta": {
-                    **model_meta_processed,
-                    "description": f"{model_meta_processed.get('description', '')} (启用高级搜索)".strip()
-                },
-            })
-            logger.info(
-                "Generated advanced-search variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}",
-                processed_id,
-                processed_name,
-                advanced_search_id,
-                advanced_search_name,
-                source_id
-            )
+        # 只为已映射的模型生成变体
+        is_mapped_model = source_id in settings.MODELS_MAPPING
+        
+        if is_mapped_model and model_meta and model_meta.capabilities:
+            for feature_key, feature_config in FEATURE_SWITCHES.items():
+                is_enabled = getattr(model_meta.capabilities, feature_key, False)
+                
+                # 如果是 "think" 且 negate 为 True，则当 think 为 True 时生成 nothinking 变体
+                # 否则，当功能启用时生成变体
+                should_generate_variant = (is_enabled and not feature_config.get("negate", False)) or \
+                                          (is_enabled and feature_config.get("negate", False))
+                
+                # 检查模型名称是否已经包含该功能标识，避免重复变体
+                # 例如 glm-4.5v 已经表示 vision，不应再生成 glm-4.5v-vision
+                already_has_feature = False
+                
+                # 特殊处理：模型名称末尾为版本号+v（如 4.5v, 4.1v）表示 vision
+                if feature_key == "vision" and processed_name.lower().endswith("v"):
+                    # 检查 v 前面是否是数字（版本号）
+                    import re
+                    if re.search(r'\d+\.?\d*v$', processed_name.lower()):
+                        already_has_feature = True
+                
+                # 通用检查：功能名是否包含在模型名中
+                if not already_has_feature:
+                    feature_name_lower = feature_key.lower().replace("_", "")
+                    model_name_lower = processed_name.lower().replace("-", "").replace("_", "")
+                    already_has_feature = feature_name_lower in model_name_lower
+                
+                if should_generate_variant and not already_has_feature:
+                    variant_id = f"{processed_id}{feature_config['suffix']}"
+                    variant_name = f"{processed_name}{feature_config['name_suffix']}"
+                    variant_description = f"{model_meta.description or ''} {feature_config['description_suffix']}".strip()
+                    
+                    # 创建新的 capabilities 字典，并根据变体类型修改对应功能
+                    variant_capabilities_dict = base_capabilities.copy()
+                    if feature_config.get("negate", False):
+                        variant_capabilities_dict[feature_key] = False  # 禁用该功能
+                    else:
+                        variant_capabilities_dict[feature_key] = True  # 确保启用该功能
+                    
+                    variant_downstream_model = DownstreamModel(
+                        id=variant_id,
+                        object="model",
+                        name=variant_name,
+                        created=model_info.created_at or int(datetime.now().timestamp()),
+                        owned_by="z.ai",
+                        meta=DownstreamMeta(
+                            profile_image_url=(model_meta.profile_image_url if model_meta else None) or default_logo,
+                            description=variant_description,
+                            capabilities=DownstreamCapability(**variant_capabilities_dict),
+                            suggestion_prompts=simplified_suggestion_prompts,
+                            hidden=model_meta.hidden if model_meta else None
+                        ),
+                        info=model_info.model_dump(),
+                        original=m.model_dump()
+                    )
+                    downstream_models.append(variant_downstream_model)
+                    
+                    if variant_id not in settings.REVERSE_MODELS_MAPPING:
+                        settings.REVERSE_MODELS_MAPPING[variant_id] = source_id
+                        logger.info(
+                            "Added reverse mapping for variant: {} -> {}",
+                            variant_id,
+                            source_id
+                        )
+                    logger.info(
+                        "Generated variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}, feature={}",
+                        processed_id,
+                        processed_name,
+                        variant_id,
+                        variant_name,
+                        source_id,
+                        feature_key
+                    )
     
-    result = {
-        "object": "list",
-        "data": models,
-    }
+    result = DownstreamModelsResponse(
+        object="list",
+        data=downstream_models,
+    )
     
-    _models_cache = result
+    _models_cache = result.model_dump()  # 缓存 Pydantic 模型转换为字典
     
-    upstream_total = len(upstream_data.get("data", []))
-    active_count = len([m for m in upstream_data.get("data", []) if m.get("info", {}).get("is_active", True)])
-    variants_count = len(models)
+    upstream_total = len(upstream_data.data)
+    active_count = len([m for m in upstream_data.data if m.info.is_active])
+    variants_count = len(downstream_models)
     reverse_mapping_count = len(settings.REVERSE_MODELS_MAPPING)
     
     logger.info(
@@ -360,7 +391,7 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     if settings.verbose_logging:
         logger.debug("Current reverse mappings: {}", dict(settings.REVERSE_MODELS_MAPPING))
     
-    return result
+    return result.model_dump()  # 返回 Pydantic 模型转换为字典
 
 
 def clear_models_cache() -> None:

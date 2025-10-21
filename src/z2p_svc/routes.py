@@ -63,10 +63,8 @@ async def list_models(request: Request) -> dict:
     if auth_header and " " in auth_header:
         access_token = auth_header.split(" ")[-1]
     
-    
     try:
-        from .model_service import fetch_models_from_upstream
-        models_data = await fetch_models_from_upstream(access_token=access_token)
+        models_data = await get_models(access_token=access_token, use_cache=True)
         return models_data
     except Exception as e:
         logger.error("Failed to fetch models: error={}", str(e))
