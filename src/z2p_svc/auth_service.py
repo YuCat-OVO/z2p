@@ -39,13 +39,12 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
     """访问聊天页面以获取 acw_tc cookie。
     
     :param access_token: 访问令牌
+    :type access_token: str
     :return: 包含 acw_tc cookie 的字典
+    :rtype: dict[str, str]
     
-    Example::
-    
-        >>> import asyncio
-        >>> cookies = asyncio.run(fetch_acw_tc_cookie("token"))
-        >>> print(cookies.get("acw_tc"))
+    .. note::
+       acw_tc cookie 用于阿里云 WAF 验证
     """
     chat_page_url = f"{settings.proxy_url}"
     
@@ -94,20 +93,23 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
 
 
 async def authenticate_with_cookies(access_token: str, chat_id: str | None = None) -> tuple[str, str, str | None, dict[str, str]]:
-    """通过cookie链式认证获取用户信息。
+    """通过 cookie 链式认证获取用户信息。
     
-    采用两步认证流程：先获取acw_tc cookie，再使用该cookie调用认证接口获取Bearer token。
+    采用两步认证流程：
+    
+    1. 获取 acw_tc cookie
+    2. 使用该 cookie 调用认证接口获取 Bearer token
     
     :param access_token: 客户端提供的访问令牌
-    :param chat_id: 可选的聊天会话ID，用于构建Referer头
-    :return: 包含 user_id、auth_token、user_name 和 cookies 的元组
+    :param chat_id: 聊天会话 ID（可选），用于构建 Referer 头
+    :type access_token: str
+    :type chat_id: str | None
+    :return: (user_id, auth_token, user_name, cookies) 四元组
+    :rtype: tuple[str, str, str | None, dict[str, str]]
+    :raises Exception: 当认证失败时
     
-    Example::
-    
-        >>> import asyncio
-        >>> user_id, auth_token, user_name, cookies = asyncio.run(authenticate_with_cookies("your_token"))
-        >>> print(cookies.get("acw_tc"))
-        >>> print(auth_token)
+    .. note::
+       如果提供了 chat_id，会添加 Referer 头以模拟真实浏览器行为
     """
     cookies = await fetch_acw_tc_cookie(access_token)
     
@@ -191,23 +193,22 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
 async def get_user_info(access_token: str, chat_id: str | None = None) -> UserInfo:
     """获取用户信息。
     
-    采用无缓存的实时认证策略，每次调用都重新获取cookie和token，确保数据一致性。
+    采用无缓存的实时认证策略，每次调用都重新获取 cookie 和 token，确保数据一致性。
     
     :param access_token: 客户端提供的访问令牌
-    :param chat_id: 可选的聊天会话ID，用于构建Referer头
+    :param chat_id: 聊天会话 ID（可选），用于构建 Referer 头
+    :type access_token: str
+    :type chat_id: str | None
     :return: 包含 user_id、token、name 和 cookies 的用户信息字典
+    :rtype: UserInfo
     :raises Exception: 当认证接口返回错误时
-    
-    Example::
-    
-        >>> import asyncio
-        >>> user_info = asyncio.run(get_user_info("your_token_here", "chat-id"))
-        >>> print(user_info["user_id"])
-        >>> print(user_info["cookies"])
     
     .. note::
        此函数不使用缓存，每次都会请求认证接口，确保数据一致性。
-       采用cookie链式认证流程确保acw_tc cookie和Bearer token的一致性。
+       采用 cookie 链式认证流程确保 acw_tc cookie 和 Bearer token 的一致性。
+    
+    .. warning::
+       当前服务已暂时屏蔽此认证机制，直接使用客户端提供的 access_token
     """
     user_id, auth_token, user_name, cookies = await authenticate_with_cookies(access_token, chat_id)
     

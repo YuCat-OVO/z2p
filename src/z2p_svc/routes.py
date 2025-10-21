@@ -13,11 +13,11 @@ from fastapi import APIRouter, Request, Response, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from .chat_service import (
-    UpstreamAPIError,
     process_non_streaming_response,
     process_streaming_response,
 )
 from .config import get_settings
+from .exceptions import UpstreamAPIError
 from .logger import get_logger
 from .models import ChatRequest, FileObject, ErrorResponse, ErrorDetail
 from .model_service import get_models
@@ -48,15 +48,15 @@ async def chat_completions_options() -> Response:
 async def list_models(request: Request) -> dict:
     """列出所有可用的模型。
     
-    从上游API动态获取模型列表，并进行智能处理和格式化。
+    从上游 API 动态获取模型列表，并进行智能处理和格式化。
 
-    :param request: FastAPI请求对象，用于获取认证信息
+    :param request: FastAPI 请求对象，用于获取认证信息
+    :type request: Request
     :return: 包含模型列表的字典
-
-    Example::
-
-        >>> response = await list_models()
-        >>> print(response["data"])
+    :rtype: dict
+    
+    .. note::
+       支持通过 Authorization 头传递访问令牌
     """
     auth_header = request.headers.get("Authorization")
     access_token = None
@@ -72,11 +72,17 @@ async def list_models(request: Request) -> dict:
 
 @router.post("/v1/files", response_model=None)
 async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[dict, Response]:
-    """处理文件上传请求。
+    """处理文件上传请求（OpenAI 兼容）。
 
-    :param request: FastAPI请求对象，用于获取认证信息
+    :param request: FastAPI 请求对象，用于获取认证信息
     :param file: 上传的文件
-    :return: 符合OpenAI文件对象规范的响应
+    :type request: Request
+    :type file: UploadFile
+    :return: 符合 OpenAI 文件对象规范的响应
+    :rtype: Union[dict, Response]
+    
+    .. note::
+       需要在 Authorization 头中提供 Bearer token
     """
     auth_header = request.headers.get("Authorization")
     access_token = None
@@ -92,14 +98,15 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[d
         )
 
     try:
-        chat_id = str(uuid.uuid4())
-        file_uploader = FileUploader(access_token, chat_id)
+        chat_id_obj = uuid.uuid4()
+        chat_id = str(chat_id_obj)
+        file_uploader = FileUploader(access_token, chat_id_obj.hex)
         
         file_content = await file.read()
         base64_encoded_content = base64.b64encode(file_content).decode("utf-8")
         
         # 调用 FileUploader 的 upload_base64_file 方法
-        file_id_with_filename = await file_uploader.upload_base64_file(base64_encoded_content, file.filename)
+        file_id_with_filename = await file_uploader.upload_base64_file(base64_encoded_content, filename=file.filename)
         
         if not file_id_with_filename:
             raise Exception("File upload failed, no ID returned from upstream.")
@@ -151,17 +158,26 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[d
 
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(request: Request, chat_request: ChatRequest) -> Union[Response, StreamingResponse]:
-    """处理聊天补全请求。
+    """处理聊天补全请求（OpenAI 兼容）。
 
-    支持流式和非流式两种响应模式，根据chat_request.stream参数决定。
+    支持流式和非流式两种响应模式，根据 ``chat_request.stream`` 参数决定。
 
-    :param request: FastAPI请求对象，用于获取认证信息
+    :param request: FastAPI 请求对象，用于获取认证信息
     :param chat_request: 聊天请求参数
-    :return: 流式响应或JSON响应
-    :raises HTTPException: 当模型不在允许列表中或上游API出错时
+    :type request: Request
+    :type chat_request: ChatRequest
+    :return: 流式响应或 JSON 响应
+    :rtype: Union[Response, StreamingResponse]
+    :raises UpstreamAPIError: 当上游 API 出错时
 
     .. note::
-       需要在Authorization头中提供Bearer token。
+       需要在 Authorization 头中提供 Bearer token
+    
+    .. note::
+       **响应模式:**
+       
+       - 流式：返回 Server-Sent Events (SSE) 格式
+       - 非流式：返回完整的 JSON 响应
     """
     auth_header = request.headers.get("Authorization")
     if not auth_header:

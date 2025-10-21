@@ -4,271 +4,70 @@
 流式和非流式响应处理、签名生成和请求构建。
 """
 
-import json
-import re
+import asyncio
 import time
 import uuid
-from datetime import datetime, UTC
+from datetime import datetime
 from typing import Any, AsyncGenerator
 
-import httpx
 
 from .config import get_settings
 from .file_uploader import FileUploader
 from .logger import get_logger
 from .models import (
     ChatRequest,
-    Message,
-    ChatCompletionChunk,
-    ChatCompletionChunkChoice,
-    ChatCompletionChunkDelta,
-    ChatCompletionResponse,
-    ChatCompletionChoice,
-    ChatCompletionMessage,
-    ChatCompletionUsage,
-    ConvertedMessages,
     ModelFeatures,
     UpstreamRequestData,
     UpstreamRequestParams,
 )
-from .proxy_manager import switch_proxy_node
 from .signature_generator import generate_signature
+from .services.chat.converter import convert_messages
+from .services.chat.streaming import process_streaming_response as _process_streaming_response
+from .services.chat.non_streaming import process_non_streaming_response as _process_non_streaming_response
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 
-def is_aliyun_blocked_response(response_text: str) -> bool:
-    """检测是否为阿里云拦截的405响应。
-    
-    阿里云的拦截响应包含特定的HTML特征：
-    - 包含 "data-spm" 属性
-    - 包含 "block_message" 或 "block_traceid" 等特定ID
-    - 包含阿里云错误图片URL
-    
-    :param response_text: HTTP响应文本内容
-    :return: 如果是阿里云拦截响应返回True，否则返回False
-    """
-    if not response_text:
-        return False
-    
-    # 检查阿里云拦截响应的特征标识
-    aliyun_indicators = [
-        'data-spm',
-        'block_message',
-        'block_traceid',
-        'errors.aliyun.com',
-        'potential threats to the server',
-        '由于您访问的URL有可能对网站造成安全威胁'
-    ]
-    
-    # 如果包含多个特征标识，则判定为阿里云拦截
-    matches = sum(1 for indicator in aliyun_indicators if indicator in response_text)
-    return matches >= 2
-
-
-class UpstreamAPIError(Exception):
-    """上游API错误异常类。
-    
-    用于封装上游API返回的HTTP错误，包含状态码和错误信息。
-    """
-    
-    def __init__(self, status_code: int, message: str, error_type: str = "upstream_error"):
-        self.status_code = status_code
-        self.message = message
-        self.error_type = error_type
-        super().__init__(self.message)
-
-
-def create_chat_completion_chunk(
-    content: str,
-    model: str,
-    timestamp: int,
-    phase: str,
-    usage: dict[str, Any] | None = None,
-    finish_reason: str | None = None,
-) -> dict[str, Any]:
-    """创建聊天补全数据块。
-
-    :param content: 响应内容
-    :param model: 模型名称
-    :param timestamp: 时间戳
-    :param phase: 响应阶段（thinking/answer/other/tool_call）
-    :param usage: 使用统计信息
-    :param finish_reason: 完成原因
-    :return: 符合OpenAI格式的响应数据块
-    """
-    # 构建 delta 对象
-    delta_kwargs = {"role": "assistant"}
-    if phase == "thinking":
-        delta_kwargs["reasoning_content"] = content
-    elif phase in ("answer", "tool_call", "other"):
-        delta_kwargs["content"] = content
-    
-    delta = ChatCompletionChunkDelta(**delta_kwargs)
-    
-    # 构建 choice 对象
-    choice = ChatCompletionChunkChoice(
-        index=0,
-        delta=delta,
-        finish_reason=finish_reason if phase == "other" else None
-    )
-    
-    # 构建完整的响应块
-    chunk = ChatCompletionChunk(
-        id=f"chatcmpl-{uuid.uuid4()}",
-        created=timestamp,
-        model=model,
-        choices=[choice],
-        usage=ChatCompletionUsage(**usage) if usage else None
-    )
-    
-    return chunk.model_dump(exclude_none=True)
-
-
-def create_error_chunk(
-    error_message: str,
-    error_type: str,
-    model: str,
-    status_code: int | None = None,
-) -> str:
-    """创建错误响应块。
-
-    :param error_message: 错误消息
-    :param error_type: 错误类型
-    :param model: 模型名称
-    :param status_code: HTTP状态码
-    :return: SSE格式的错误响应
-    """
-    error_data = {
-        "id": f"chatcmpl-{uuid.uuid4()}",
-        "object": "chat.completion.chunk",
-        "created": int(datetime.now(UTC).timestamp()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {},
-                "finish_reason": "error",
-            }
-        ],
-        "error": {
-            "message": error_message,
-            "type": error_type,
-            "code": status_code,
-        },
-    }
-    return f"data: {json.dumps(error_data)}\n\n"
-
-
-def convert_messages(messages: list[Message]) -> ConvertedMessages:
-    """转换消息格式为上游API所需格式。
-
-    :param messages: 输入消息列表
-    :return: 包含转换后的消息、文件URL（包括图片和其他文件）和签名内容的 Pydantic 模型
-    """
-    trans_messages = []
-    file_urls = []
-    last_user_message_text = ""
-
-    for message in messages:
-        role = message.role
-        content = message.content
-        
-        if isinstance(content, str):
-            trans_messages.append({"role": role, "content": content})
-            if role == "user":
-                last_user_message_text = content
-        elif isinstance(content, list):
-            text_content = ""
-            dont_append = False
-            new_message: dict[str, Any] = {"role": role}
-            
-            for part in content:
-                part_type = part.get("type")
-                
-                if part_type == "text":
-                    text_content = part.get("text", "")
-                
-                elif part_type == "image_url":
-                    file_url = part.get("image_url", {}).get("url", "")
-                    if file_url:
-                        file_urls.append(file_url)
-                
-                elif part_type == "file":
-                    file_url = part.get("url", "")
-                    if file_url:
-                        file_urls.append(file_url)
-                
-                elif part_type == "tool_use" and role == "assistant":
-                    if "tool_calls" not in new_message:
-                        new_message["tool_calls"] = []
-                    
-                    tool_calls = new_message["tool_calls"]
-                    if isinstance(tool_calls, list):
-                        tool_calls.append({
-                        "id": part.get("id"),
-                        "type": "function",
-                        "function": {
-                            "name": part.get("name"),
-                            "arguments": json.dumps(part.get("input", {}) or {}, ensure_ascii=False)
-                        }
-                    })
-                    dont_append = True
-                
-                elif part_type == "tool_result":
-                    tool_result_content = part.get("content", [])
-                    
-                    if isinstance(tool_result_content, list):
-                        text_parts = []
-                        for item in tool_result_content:
-                            if item.get("type") == "text" and item.get("text", ""):
-                                text_parts.append(item.get("text"))
-                        result = "".join(text_parts) if text_parts else ""
-                    else:
-                        result = tool_result_content
-                    
-                    trans_messages.append({
-                        "role": "tool",
-                        "tool_call_id": part.get("tool_use_id"),
-                        "content": result
-                    })
-                    dont_append = True
-            
-            if text_content and role == "user":
-                last_user_message_text = text_content
-            
-            if not dont_append and text_content:
-                trans_messages.append({
-                    "role": role,
-                    "content": text_content
-                })
-            elif not dont_append and new_message.get("tool_calls"):
-                if text_content:
-                    new_message["content"] = text_content
-                trans_messages.append(new_message)
-
-    return ConvertedMessages(
-        messages=trans_messages,
-        file_urls=file_urls,
-        last_user_message_text=last_user_message_text
-    )
 
 
 def get_model_features(model: str, streaming: bool, model_capabilities: dict[str, Any] | None = None) -> dict[str, Any]:
     """获取模型特性配置。
     
-    根据模型ID自动识别并配置相应的功能开关：
-    - nothinking: 禁用深度思考
-    - search: 启用网络搜索
-    - advanced-search: 启用高级搜索（包含MCP服务器）
-    - fileqa: 启用文件问答
-    - mcp: 启用MCP工具
-
-    :param model: 模型名称（客户端请求的模型ID，可能包含功能后缀）
+    根据模型 ID 自动识别并配置功能开关。支持通过模型名称后缀
+    控制特性（如 ``-nothinking``、``-search``、``-advanced-search``）。
+    
+    :param model: 模型名称（客户端请求的模型 ID，可能包含功能后缀）
     :param streaming: 是否为流式请求
-    :param model_capabilities: 上游模型的能力配置（从模型列表中获取）
-    :return: 包含特性和MCP服务器配置的字典
+    :param model_capabilities: 上游模型的能力配置（从模型列表获取）
+    :type model: str
+    :type streaming: bool
+    :type model_capabilities: dict[str, Any] | None
+    :return: 包含特性配置和 MCP 服务器列表的字典
+    :rtype: dict[str, Any]
+    
+    **返回字典结构:**
+    
+    .. code-block:: python
+    
+       {
+           "features": {
+               "enable_thinking": bool,
+               "web_search": bool,
+               "auto_web_search": bool,
+               "preview_mode": bool
+           },
+           "mcp_servers": List[str]
+       }
+    
+    **支持的模型后缀:**
+    
+    - ``-nothinking``: 禁用深度思考功能
+    - ``-search``: 启用网络搜索
+    - ``-advanced-search``: 启用高级搜索（包含 MCP 服务器）
+    
+    .. note::
+       非流式请求会自动禁用 thinking 功能
     """
     # 使用 Pydantic 模型构建特性配置
     features = ModelFeatures()
@@ -318,12 +117,41 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
 async def prepare_request_data(
     chat_request: ChatRequest, access_token: str, streaming: bool = True
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
-    """准备上游API请求数据。
-
+    """准备上游 API 请求数据。
+    
+    执行完整的请求准备流程：
+    
+    1. 转换消息格式为上游 API 格式
+    2. 并发处理文件上传（图片、视频、文档）
+    3. 生成请求签名
+    4. 构建请求头和查询参数
+    5. 配置模型特性
+    
     :param chat_request: 聊天请求对象
-    :param access_token: 访问令牌
-    :param streaming: 是否为流式请求
-    :return: 包含请求数据、查询参数和请求头的元组
+    :param access_token: 用户访问令牌
+    :param streaming: 是否为流式请求，默认为 True
+    :type chat_request: ChatRequest
+    :type access_token: str
+    :type streaming: bool
+    :return: 包含请求数据、查询参数和请求头的三元组
+    :rtype: tuple[dict[str, Any], dict[str, str], dict[str, str]]
+    :raises FileUploadError: 当文件上传失败时
+    :raises ValueError: 当模型 ID 无效时
+    
+    **返回值说明:**
+    
+    - ``tuple[0]``: 请求体数据（JSON 格式）
+    - ``tuple[1]``: 查询参数字典（requestId、timestamp 等）
+    - ``tuple[2]``: 请求头字典（Authorization、X-Signature 等）
+    
+    .. note::
+       **文件处理逻辑:**
+       
+       - 图片/视频：嵌入到 ``messages.content`` 数组
+       - 其他文件：放入顶层 ``files`` 数组
+    
+    .. warning::
+       文件上传采用并发处理，失败的文件会被跳过而不会中断整个请求
     """
     logger.info(
         "Preparing request data: model={}, streaming={}, message_count={}",
@@ -355,18 +183,47 @@ async def prepare_request_data(
     auth_token = access_token
     cookies = {}
 
-    # 将客户端模型ID转换为上游API识别的模型ID
-    upstream_model_id = settings.REVERSE_MODELS_MAPPING.get(chat_request.model)
+    # 验证请求的模型是否在可用模型列表中
+    model_exists = any(m["id"] == chat_request.model for m in models)
     
-    if upstream_model_id:
+    if not model_exists:
+        # 检查是否是上游原始模型ID（未经映射的）
+        is_upstream_model = any(
+            m.get("info", {}).get("id") == chat_request.model
+            for m in models
+        )
+        
+        if not is_upstream_model:
+            logger.error(
+                "Model not found in available models list: model={}, available_count={}",
+                chat_request.model,
+                len(models)
+            )
+            raise ValueError(
+                f"模型 '{chat_request.model}' 不存在。请使用 /v1/models 接口查看可用模型列表。"
+            )
+    
+    # 将客户端模型ID转换为上游API识别的模型ID
+    # 支持多级映射：variant -> base_model -> upstream_model
+    upstream_model_id = chat_request.model
+    max_mapping_depth = 10  # 防止循环映射
+    mapping_chain = [chat_request.model]
+    
+    for _ in range(max_mapping_depth):
+        next_id = settings.REVERSE_MODELS_MAPPING.get(upstream_model_id)
+        if next_id and next_id != upstream_model_id:
+            upstream_model_id = next_id
+            mapping_chain.append(upstream_model_id)
+        else:
+            break
+    
+    if len(mapping_chain) > 1:
         if settings.verbose_logging:
             logger.debug(
-                "Model mapped via REVERSE_MODELS_MAPPING: {} -> {}",
-                chat_request.model,
-                upstream_model_id
+                "Model mapping chain: {}",
+                " -> ".join(mapping_chain)
             )
     else:
-        upstream_model_id = chat_request.model
         logger.warning(
             "No reverse mapping found for model={}, using original ID. This may cause upstream API errors.",
             chat_request.model
@@ -445,7 +302,8 @@ async def prepare_request_data(
         
         file_uploader = FileUploader(auth_token, zai_data.chat_id, cookies)
         
-        for idx, url in enumerate(file_urls):
+        # 并发上传文件
+        async def upload_single_file(idx: int, url: str):
             try:
                 if url.startswith("data:"):
                     url_type = "base64"
@@ -495,17 +353,16 @@ async def prepare_request_data(
                         file_object = await file_uploader.upload_base64_file(base64_data, file_type=file_ext)
                     else:
                         logger.warning("Unsupported data URL format (missing base64): url={}", url[:50])
-                        continue
+                        return None
                 
                 elif url.startswith("http"):
                     file_object = await file_uploader.upload_file_from_url(url)
                 
                 else:
                     logger.warning("Unsupported file URL format: url={}", url[:50])
-                    continue
+                    return None
 
                 if file_object:
-                    uploaded_file_objects.append(file_object)
                     logger.info(
                         "File uploaded successfully: index={}/{}, file_id={}, media={}, request_id={}",
                         idx + 1,
@@ -514,6 +371,7 @@ async def prepare_request_data(
                         file_object["media"],
                         zai_data.id,
                     )
+                    return file_object
                 else:
                     logger.warning(
                         "File upload returned no object: index={}/{}, url_preview={}, request_id={}",
@@ -522,6 +380,7 @@ async def prepare_request_data(
                         url[:80] if len(url) > 80 else url,
                         zai_data.id,
                     )
+                    return None
             except Exception as e:
                 logger.error(
                     "File upload failed: index={}/{}, url_preview={}, error={}, request_id={}",
@@ -531,6 +390,17 @@ async def prepare_request_data(
                     str(e),
                     zai_data.id,
                 )
+                return None
+        
+        # 并发上传所有文件
+        upload_tasks = [upload_single_file(idx, url) for idx, url in enumerate(file_urls)]
+        upload_results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+        
+        # 过滤出成功上传的文件
+        uploaded_file_objects = [
+            result for result in upload_results
+            if result is not None and not isinstance(result, (Exception, BaseException)) and isinstance(result, dict)
+        ]
 
         if uploaded_file_objects:
             logger.info(
@@ -656,7 +526,7 @@ async def prepare_request_data(
     return zai_data.model_dump(), params.model_dump(), headers
 
 
-async def process_streaming_response(
+def process_streaming_response(
     chat_request: ChatRequest, access_token: str
 ) -> AsyncGenerator[str, None]:
     """处理流式响应。
@@ -669,215 +539,7 @@ async def process_streaming_response(
     .. note::
        响应格式遵循OpenAI的流式API规范。
     """
-    zai_data, params, headers = await prepare_request_data(chat_request, access_token)
-    
-    request_id = params.get("requestId", "unknown")
-    user_id = params.get("user_id", "unknown")
-    timestamp = params.get("timestamp", "unknown")
-
-    logger.info(
-        "Streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
-        request_id,
-        user_id,
-        chat_request.model,
-        f"{settings.proxy_url}/api/chat/completions",
-    )
-    
-    if settings.verbose_logging:
-        logger.debug(
-            "Streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
-            request_id,
-            f"{settings.proxy_url}/api/chat/completions",
-            {k: v if k.lower() != 'authorization' else v[:20] + '...' for k, v in headers.items()}, # 脱敏 Authorization
-            params,
-            zai_data,
-        )
-
-    async with httpx.AsyncClient() as client:
-        try:
-            async with client.stream(
-                "POST",
-                f"{settings.proxy_url}/api/chat/completions",
-                headers=headers,
-                params=params,
-                json=zai_data,
-                timeout=300,
-            ) as response:
-                if response.status_code != 200:
-                    error_content = await response.aread()
-                    error_text = error_content.decode('utf-8', errors='ignore')
-                    
-                    # 检测是否为阿里云拦截的405响应
-                    if response.status_code == 405 and is_aliyun_blocked_response(error_text):
-                        logger.warning(
-                            "Aliyun blocked request detected (405 -> 429): request_id={}, user_id={}, timestamp={}, model={}, url={}",
-                            request_id,
-                            user_id,
-                            timestamp,
-                            chat_request.model,
-                            str(response.url),
-                        )
-                        # 如果启用了代理切换，尝试切换节点
-                        if settings.enable_mihomo_switch:
-                            logger.info("Attempting Mihomo proxy switch due to Aliyun block: request_id={}", request_id)
-                            await switch_proxy_node()
-                        # 将阿里云的405拦截转换为429限流错误
-                        error_msg = "请求过于频繁：同一IP多次请求被拦截，请稍后再试"
-                        error_type = "rate_limit_error"
-                        raise UpstreamAPIError(429, error_msg, error_type)
-                    
-                    logger.error(
-                        "Upstream HTTP error: status_code={}, response_text={}, request_id={}, user_id={}, timestamp={}, model={}, url={}",
-                        response.status_code,
-                        error_text[:200],
-                        request_id,
-                        user_id,
-                        timestamp,
-                        chat_request.model,
-                        str(response.url),
-                    )
-                    
-                    if response.status_code == 400:
-                        error_msg = "请求参数错误：请检查请求格式和参数"
-                        error_type = "bad_request_error"
-                    elif response.status_code == 401:
-                        error_msg = "认证失败：访问令牌无效或已过期"
-                        error_type = "authentication_error"
-                    elif response.status_code == 403:
-                        error_msg = "权限不足：无权访问该资源"
-                        error_type = "permission_error"
-                    elif response.status_code == 405:
-                        error_msg = "请求方法不允许：请求的HTTP方法不被支持"
-                        error_type = "method_not_allowed_error"
-                    elif response.status_code == 429:
-                        error_msg = "请求过于频繁，请稍后再试"
-                        error_type = "rate_limit_error"
-                    elif response.status_code >= 500:
-                        error_msg = "上游服务器错误，请稍后再试"
-                        error_type = "server_error"
-                    else:
-                        error_msg = f"HTTP错误 {response.status_code}: {error_text[:100]}"
-                        error_type = "http_error"
-                    
-                    raise UpstreamAPIError(response.status_code, error_msg, error_type)
-                
-                logger.info(
-                    "Streaming response started: request_id={}, status_code={}, model={}",
-                    request_id,
-                    response.status_code,
-                    chat_request.model,
-                )
-                
-                timestamp = int(datetime.now().timestamp())
-                chunk_count = 0
-
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-
-                    json_str = line[6:]
-                    try:
-                        json_object = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        logger.warning("Invalid JSON in stream: line={}", line[:100])
-                        continue
-
-                    data = json_object.get("data", {})
-                    phase = data.get("phase")
-
-                    if phase == "thinking":
-                        content = data.get("delta_content", "")
-                        if "</summary>\n" in content:
-                            content = content.split("</summary>\n")[-1]
-                        chunk_count += 1
-                        if settings.verbose_logging and chunk_count % 10 == 0:
-                            logger.debug("Streaming thinking progress: request_id={}, chunks={}", request_id, chunk_count)
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'thinking'))}\n\n"
-
-                    elif phase == "answer":
-                        content = data.get("delta_content") or data.get("edit_content", "")
-                        if "</details>" in content:
-                            content = content.split("</details>")[-1]
-                        chunk_count += 1
-                        if settings.verbose_logging and chunk_count % 10 == 0:
-                            logger.debug("Streaming answer progress: request_id={}, chunks={}", request_id, chunk_count)
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer'))}\n\n"
-
-                    elif phase == "tool_call":
-                        content = data.get("delta_content") or data.get("edit_content", "")
-                        content = re.sub(r'\n*<glm_block[^>]*>{"type": "mcp", "data": {"metadata": {', '{', content)
-                        content = re.sub(r'", "result": "".*</glm_block>', '', content)
-                        chunk_count += 1
-                        if settings.verbose_logging and chunk_count % 10 == 0:
-                            logger.debug("Streaming tool_call progress: request_id={}, chunks={}", request_id, chunk_count)
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'tool_call'))}\n\n"
-
-                    elif phase == "other":
-                        usage = data.get("usage", {})
-                        content = data.get("delta_content", "")
-                        logger.info(
-                            "Streaming completion: request_id={}, model={}, total_chunks={}, usage={}",
-                            request_id,
-                            chat_request.model,
-                            chunk_count,
-                            usage
-                        )
-                        yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', usage, 'stop'))}\n\n"
-
-                    elif phase == "done":
-                        logger.info(
-                            "Streaming finished: request_id={}, model={}, total_chunks={}",
-                            request_id,
-                            chat_request.model,
-                            chunk_count
-                        )
-                        yield "data: [DONE]\n\n"
-                        break
-
-        except UpstreamAPIError:
-            raise
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Unexpected HTTP status error: status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
-                e.response.status_code,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                e.response.status_code,
-                f"HTTP错误 {e.response.status_code}",
-                "http_error"
-            )
-        except httpx.RequestError as e:
-            logger.error(
-                "Upstream request error: error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                500,
-                f"请求错误: {str(e)}",
-                "request_error"
-            )
-        except Exception as e:
-            logger.error(
-                "Unexpected error streaming: error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                500,
-                f"未知错误: {str(e)}",
-                "unknown_error"
-            )
+    return _process_streaming_response(chat_request, access_token, prepare_request_data)
 
 
 async def process_non_streaming_response(
@@ -893,193 +555,4 @@ async def process_non_streaming_response(
     .. note::
        响应格式遵循OpenAI的非流式API规范。
     """
-    zai_data, params, headers = await prepare_request_data(chat_request, access_token, False)
-    full_response = ""
-    usage = {}
-    
-    request_id = params.get("requestId", "unknown")
-    user_id = params.get("user_id", "unknown")
-    timestamp = params.get("timestamp", "unknown")
-
-    logger.info(
-        "Non-streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
-        request_id,
-        user_id,
-        chat_request.model,
-        f"{settings.proxy_url}/api/chat/completions",
-    )
-    
-    if settings.verbose_logging:
-        logger.debug(
-            "Non-streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
-            request_id,
-            f"{settings.proxy_url}/api/chat/completions",
-            {k: v if k.lower() != 'authorization' else v[:20] + '...' for k, v in headers.items()}, # 脱敏 Authorization
-            params,
-            zai_data,
-        )
-
-    async with httpx.AsyncClient() as client:
-        try:
-            async with client.stream(
-                method="POST",
-                url=f"{settings.proxy_url}/api/chat/completions",
-                headers=headers,
-                params=params,
-                json=zai_data,
-                timeout=300,
-            ) as response:
-                if response.status_code != 200:
-                    error_content = await response.aread()
-                    error_text = error_content.decode('utf-8', errors='ignore')
-                    
-                    # 检测是否为阿里云拦截的405响应
-                    if response.status_code == 405 and is_aliyun_blocked_response(error_text):
-                        logger.warning(
-                            "Aliyun blocked request detected (405 -> 429) (non-streaming): request_id={}, user_id={}, timestamp={}, model={}, url={}",
-                            request_id,
-                            user_id,
-                            timestamp,
-                            chat_request.model,
-                            str(response.url),
-                        )
-                        # 如果启用了代理切换，尝试切换节点
-                        if settings.enable_mihomo_switch:
-                            logger.info("Attempting Mihomo proxy switch due to Aliyun block (non-streaming): request_id={}", request_id)
-                            await switch_proxy_node()
-                        # 将阿里云的405拦截转换为429限流错误
-                        error_msg = "请求过于频繁：同一IP多次请求被拦截，请稍后再试"
-                        error_type = "rate_limit_error"
-                        raise UpstreamAPIError(429, error_msg, error_type)
-                    
-                    logger.error(
-                        "Upstream HTTP error (non-streaming): status_code={}, response_text={}, request_id={}, user_id={}, timestamp={}, model={}, url={}",
-                        response.status_code,
-                        error_text[:200],
-                        request_id,
-                        user_id,
-                        timestamp,
-                        chat_request.model,
-                        str(response.url),
-                    )
-                    
-                    if response.status_code == 400:
-                        error_msg = "请求参数错误：请检查请求格式和参数"
-                        error_type = "bad_request_error"
-                    elif response.status_code == 401:
-                        error_msg = "认证失败：访问令牌无效或已过期"
-                        error_type = "authentication_error"
-                    elif response.status_code == 403:
-                        error_msg = "权限不足：无权访问该资源"
-                        error_type = "permission_error"
-                    elif response.status_code == 405:
-                        error_msg = "请求方法不允许：请求的HTTP方法不被支持"
-                        error_type = "method_not_allowed_error"
-                    elif response.status_code == 429:
-                        error_msg = "请求过于频繁，请稍后再试"
-                        error_type = "rate_limit_error"
-                    elif response.status_code >= 500:
-                        error_msg = "上游服务器错误，请稍后再试"
-                        error_type = "server_error"
-                    else:
-                        error_msg = f"HTTP错误 {response.status_code}: {error_text[:100]}"
-                        error_type = "http_error"
-                    
-                    raise UpstreamAPIError(response.status_code, error_msg, error_type)
-                
-                logger.info(
-                    "Non-streaming response started: request_id={}, status_code={}, model={}",
-                    request_id,
-                    response.status_code,
-                    chat_request.model,
-                )
-                
-                chunk_count = 0
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-
-                    json_str = line[6:]
-                    try:
-                        json_object = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        continue
-
-                    data = json_object.get("data", {})
-                    phase = data.get("phase")
-
-                    if phase == "answer":
-                        content = data.get("delta_content", "")
-                        full_response += content
-                        chunk_count += 1
-                    elif phase == "other":
-                        usage = data.get("usage", {})
-                        content = data.get("delta_content", "")
-                        full_response += content
-                        logger.info(
-                            "Non-streaming completion: request_id={}, model={}, chunks={}, response_length={}, usage={}",
-                            request_id,
-                            chat_request.model,
-                            chunk_count,
-                            len(full_response),
-                            usage,
-                        )
-
-        except UpstreamAPIError:
-            raise
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Unexpected HTTP status error (non-streaming): status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
-                e.response.status_code,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                e.response.status_code,
-                f"HTTP错误 {e.response.status_code}",
-                "http_error"
-            )
-        except httpx.RequestError as e:
-            logger.error(
-                "Upstream request error (non-streaming): error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                500,
-                f"请求错误: {str(e)}",
-                "request_error"
-            )
-        except Exception as e:
-            logger.error(
-                "Unexpected error (non-streaming): error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                500,
-                f"未知错误: {str(e)}",
-                "unknown_error"
-            )
-
-    # 使用 Pydantic 模型构建响应
-    message = ChatCompletionMessage(role="assistant", content=full_response)
-    choice = ChatCompletionChoice(index=0, message=message, finish_reason="stop")
-    
-    response = ChatCompletionResponse(
-        id=f"chatcmpl-{uuid.uuid4()}",
-        created=int(datetime.now().timestamp()),
-        model=chat_request.model,
-        choices=[choice],
-        usage=ChatCompletionUsage(**usage) if usage else None
-    )
-    
-    return response.model_dump(exclude_none=True)
+    return await _process_non_streaming_response(chat_request, access_token, prepare_request_data)

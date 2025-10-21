@@ -5,7 +5,6 @@ from .config import get_settings
 from .logger import get_logger
 
 logger = get_logger(__name__)
-settings = get_settings()
 
 
 async def switch_proxy_node() -> bool:
@@ -13,6 +12,7 @@ async def switch_proxy_node() -> bool:
     
     :return: 切换成功返回True，否则返回False
     """
+    settings = get_settings()
     if not settings.enable_mihomo_switch or not settings.mihomo_api_url:
         return False
     

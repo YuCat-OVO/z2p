@@ -11,8 +11,12 @@ from pydantic import BaseModel, Field
 class Message(BaseModel):
     """聊天消息模型。
 
-    :ivar role: 消息角色，可选值：system, user, assistant
-    :ivar content: 消息内容，可以是字符串或包含多个部分的列表（用于多模态输入）
+    表示对话中的单条消息，支持文本和多模态内容。
+
+    :param role: 消息角色（system/user/assistant）
+    :param content: 消息内容，字符串或多模态内容数组
+    :type role: str
+    :type content: Union[str, list]
     """
 
     role: str = Field(..., description="消息角色")
@@ -20,14 +24,33 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """聊天补全请求模型。
-
-    :ivar model: 使用的模型名称
-    :ivar messages: 消息列表
-    :ivar stream: 是否使用流式响应
-    :ivar temperature: 采样温度，控制输出的随机性，范围0.0-2.0
-    :ivar top_p: 核采样参数，范围0.0-1.0
-    :ivar max_tokens: 最大生成token数，最小值为1
+    """聊天补全请求模型（OpenAI 兼容）。
+    
+    符合 OpenAI Chat Completion API 规范的请求格式。
+    支持通过模型名称后缀控制特殊功能。
+    
+    **支持的模型后缀:**
+    
+    - ``-nothinking``: 禁用深度思考
+    - ``-search``: 启用网络搜索
+    - ``-mcp``: 启用 MCP 工具调用
+    
+    :param model: 模型 ID，支持功能后缀（如 -search、-nothinking）
+    :param messages: 对话消息列表，至少包含一条消息
+    :param stream: 是否使用流式响应（Server-Sent Events）
+    :param temperature: 采样温度（0.0-2.0），较高值使输出更随机
+    :param top_p: 核采样参数（0.0-1.0），建议与 temperature 二选一
+    :param max_tokens: 生成的最大 token 数量
+    :type model: str
+    :type messages: list[Message]
+    :type stream: bool
+    :type temperature: float
+    :type top_p: float
+    :type max_tokens: int
+    
+    .. seealso::
+       :class:`Message` - 消息对象
+       :class:`ChatCompletionResponse` - 响应对象
     """
 
     model: str = Field(..., description="模型名称")
@@ -447,7 +470,43 @@ class ModelFeatures(BaseModel):
 class UpstreamRequestData(BaseModel):
     """上游 API 请求数据体。
     
-    包含发送到上游 API 的完整请求体数据。
+    构建发送给智谱 AI API 的完整请求数据。
+    包含智谱 AI 特有的字段和配置。
+    
+    :param stream: 是否流式响应
+    :param model: 上游模型 ID（已转换）
+    :param messages: 转换后的消息列表
+    :param signature_prompt: 用于签名的提示词
+    :param params: 生成参数（temperature, top_p, max_tokens）
+    :param files: 非媒体文件列表
+    :param mcp_servers: MCP 服务器列表
+    :param features: 功能特性配置
+    :param variables: 模板变量（如 {{CURRENT_DATETIME}}）
+    :param model_item: 完整的模型对象
+    :param background_tasks: 后台任务配置
+    :param stream_options: 流式响应选项
+    :param chat_id: 聊天会话 ID（UUID）
+    :param id: 请求 ID（UUID）
+    :type stream: bool
+    :type model: str
+    :type messages: List[Dict[str, Any]]
+    :type signature_prompt: str
+    :type params: Dict[str, Any]
+    :type files: List[Dict[str, Any]]
+    :type mcp_servers: List[str]
+    :type features: Dict[str, Any]
+    :type variables: Dict[str, str]
+    :type model_item: Optional[Dict[str, Any]]
+    :type background_tasks: Dict[str, bool]
+    :type stream_options: Dict[str, bool]
+    :type chat_id: str
+    :type id: str
+    
+    .. note::
+       此模型与 OpenAI API 不完全兼容，包含智谱 AI 扩展字段
+    
+    .. warning::
+       ``signature_prompt`` 字段用于生成请求签名，必须与实际发送的内容一致
     """
     model_config = {"extra": "allow"}  # 允许额外字段以支持未来扩展
     

@@ -111,16 +111,22 @@ def get_model_id(source_id: str, model_name: str) -> str:
 
 @stamina.retry(on=Exception, attempts=3, wait_initial=1.0, wait_max=5.0)
 async def fetch_models_from_upstream(access_token: str | None = None) -> dict[str, Any]:
-    """从上游API获取模型列表（带重试机制）。
+    """从上游 API 获取模型列表（带重试机制）。
     
     使用 stamina 进行自动重试：
+    
     - 最多重试 3 次
     - 初始等待 1 秒
     - 最大等待 5 秒
     
-    :param access_token: 可选的访问令牌
+    :param access_token: 访问令牌（可选）
+    :type access_token: str | None
     :return: 包含模型列表的字典
-    :raises Exception: 当API请求失败且重试耗尽时
+    :rtype: dict[str, Any]
+    :raises Exception: 当 API 请求失败且重试耗尽时
+    
+    .. note::
+       使用 stamina 库实现指数退避重试策略
     """
     headers = {
         **settings.HEADERS,
@@ -183,16 +189,34 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     """获取格式化的模型列表。
     
     自动为支持特殊功能的模型生成变体：
-    - 基础模型：原始模型ID
-    - nothinking变体：禁用深度思考
-    - search变体：启用网络搜索
-    - mcp变体：启用MCP工具
-    - vision变体：启用视觉能力
-    - fileqa变体：启用文件问答
     
-    :param access_token: 可选的访问令牌
-    :param use_cache: 是否使用缓存
+    - 基础模型：原始模型 ID
+    - ``-nothinking`` 变体：禁用深度思考
+    - ``-search`` 变体：启用网络搜索
+    - ``-mcp`` 变体：启用 MCP 工具
+    - ``-vision`` 变体：启用视觉能力
+    - ``-fileqa`` 变体：启用文件问答
+    
+    :param access_token: 访问令牌（可选）
+    :param use_cache: 是否使用缓存，默认为 True
+    :type access_token: str | None
+    :type use_cache: bool
     :return: 格式化后的模型列表字典
+    :rtype: dict[str, Any]
+    
+    .. note::
+       **缓存机制:**
+       
+       - 首次调用时从上游 API 获取并缓存
+       - 后续调用返回缓存数据（除非 ``use_cache=False``）
+       - 使用 :func:`clear_models_cache` 清除缓存
+    
+    .. note::
+       **变体生成逻辑:**
+       
+       - 仅为激活的模型生成变体
+       - 避免重复变体（如 ``glm-4.5v`` 已包含 vision）
+       - 自动更新反向映射表
     """
     global _models_cache
     
@@ -297,12 +321,14 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
                     )
                     downstream_models.append(variant_downstream_model)
                     
+                    # 变体应该映射到基础模型ID，而不是上游ID
+                    # 这样可以保持映射链：variant -> base_model -> upstream_model
                     if variant_id not in settings.REVERSE_MODELS_MAPPING:
-                        settings.REVERSE_MODELS_MAPPING[variant_id] = source_id
+                        settings.REVERSE_MODELS_MAPPING[variant_id] = processed_id
                         logger.info(
                             "Added reverse mapping for variant: {} -> {}",
                             variant_id,
-                            source_id
+                            processed_id
                         )
                     logger.info(
                         "Generated variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}, feature={}",
@@ -341,7 +367,11 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
 
 
 def clear_models_cache() -> None:
-    """清除模型列表缓存。"""
+    """清除模型列表缓存。
+    
+    .. note::
+       清除缓存后，下次调用 :func:`get_models` 将重新从上游 API 获取数据
+    """
     global _models_cache
     _models_cache = None
     logger.debug("Models cache cleared")

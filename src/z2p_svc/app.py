@@ -12,13 +12,11 @@ from .config import get_settings
 from .logger import configure_logging, get_logger
 from .routes import router
 
-settings = get_settings()
-configure_logging(settings.log_level, use_colors=True, verbose=settings.verbose_logging)
-logger = get_logger(__name__)
-
 
 def create_app(lifespan=None) -> FastAPI:
     """创建并配置FastAPI应用实例。
+    
+    在函数内部读取 settings，以便测试可以 mock get_settings
 
     配置包括CORS中间件、可信主机中间件、API路由和全局异常处理。
 
@@ -29,6 +27,10 @@ def create_app(lifespan=None) -> FastAPI:
        当VERBOSE_LOGGING=true时会启用API文档（/docs和/redoc）和配置查看端点（/config）。
        生命周期管理器可以通过参数传入。
     """
+    settings = get_settings()
+    configure_logging(settings.log_level, use_colors=True, verbose=settings.verbose_logging)
+    logger = get_logger(__name__)
+    
     app = FastAPI(
         title="ZAI Proxy API",
         description="ZAI Proxy API for accessing ZAI models",

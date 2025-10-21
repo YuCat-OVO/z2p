@@ -36,19 +36,54 @@ def _get_env_files() -> tuple[str, ...]:
 
 class AppConfig(BaseSettings):
     """应用配置类。
-
-    通过环境变量自动加载配置，若环境变量未设置，则使用指定的默认值。
-    使用 :func:`get_settings` 函数获取单例配置实例。
-
-    :ivar host: 服务器监听地址（仅用于信息展示，实际由granian通过环境变量读取）
-    :ivar port: 服务器监听端口（仅用于信息展示，实际由granian通过环境变量读取）
-    :ivar workers: 工作进程数（仅用于信息展示，实际由granian通过环境变量读取）
-    :ivar log_level: 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
-    :ivar verbose_logging: 是否启用详细日志模式（包含完整时间戳、行号、backtrace和diagnose）
-    :ivar proxy_url: 代理目标URL
-    :ivar HEADERS: HTTP请求头常量
-    :ivar ALLOWED_MODELS: 允许的模型列表
-    :ivar MODELS_MAPPING: 模型名称映射
+    
+    使用 Pydantic BaseSettings 从环境变量加载配置。
+    支持从 ``.env`` 文件读取，优先级：环境变量 > .env 文件 > 默认值。
+    
+    **配置文件查找顺序:**
+    
+    1. ``.env.{APP_ENV}`` (如 ``.env.production``)
+    2. ``.env``
+    
+    :param app_env: 应用运行环境（development/production）
+    :param host: 服务器监听地址
+    :param port: 服务器监听端口（1-65535）
+    :param workers: 工作进程数（≥1）
+    :param log_level: 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）
+    :param verbose_logging: 是否启用详细日志模式
+    :param proxy_url: 代理目标 URL
+    :param secret_key: 应用密钥，用于签名生成（最少 16 字符）
+    :param mihomo_api_url: Mihomo API URL
+    :param mihomo_api_secret: Mihomo API 密钥
+    :param mihomo_proxy_group: Mihomo 代理组名称
+    :param enable_mihomo_switch: 是否启用 Mihomo 代理切换
+    :type app_env: Literal["development", "production"]
+    :type host: str
+    :type port: int
+    :type workers: int
+    :type log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    :type verbose_logging: bool
+    :type proxy_url: str
+    :type secret_key: str
+    :type mihomo_api_url: str
+    :type mihomo_api_secret: str
+    :type mihomo_proxy_group: str
+    :type enable_mihomo_switch: bool
+    
+    .. code-block:: bash
+    
+       # .env 文件示例
+       APP_ENV=production
+       SECRET_KEY=your-super-secret-key
+       PROXY_URL=https://chat.z.ai
+       LOG_LEVEL=INFO
+    
+    .. seealso::
+       :func:`get_settings` - 获取配置单例
+    
+    .. warning::
+       生产环境必须设置强密钥，最少 16 个字符。
+       不要使用默认值或简单密码。
     """
 
     model_config = SettingsConfigDict(
@@ -97,8 +132,9 @@ class AppConfig(BaseSettings):
     )
     
     secret_key: str = Field(
-        default="junjie",
-        description="应用密钥"
+        ...,  # 必填,不提供默认值
+        description="应用密钥",
+        min_length=16
     )
     
     # Mihomo代理配置
@@ -191,6 +227,7 @@ class AppConfig(BaseSettings):
             {"id": "glm-4.6-nothinking", "name": "GLM-4.6-NOTHINKING"},
         ]
 
+    @computed_field
     @property
     def MODELS_MAPPING(self) -> dict[str, str]:
         """模型名称映射。"""
@@ -200,16 +237,43 @@ class AppConfig(BaseSettings):
             "0727-360B-API": "glm-4.5",
         }
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.REVERSE_MODELS_MAPPING: dict[str, str] = {
-            "glm-4.6": "GLM-4-6-API-V1",
-            "glm-4.6-nothinking": "GLM-4-6-API-V1",
-            "glm-4.6-search": "GLM-4-6-API-V1",
-            "glm-4.6-advanced-search": "GLM-4-6-API-V1",
-            "glm-4.5v": "glm-4.5v",
-            "glm-4.5": "0727-360B-API",
-        }
+    def __init__(self, **data):
+        """初始化配置并设置反向映射表。"""
+        super().__init__(**data)
+        # 初始化反向映射表为可修改的字典
+        # 从 MODELS_MAPPING 生成基础映射
+        self._reverse_models_mapping = {v: k for k, v in self.MODELS_MAPPING.items()}
+    
+    @property
+    def REVERSE_MODELS_MAPPING(self) -> dict[str, str]:
+        """反向模型映射表（可修改）。
+        
+        初始从 :attr:`MODELS_MAPPING` 自动生成反向映射，
+        用于将客户端模型 ID 转换为上游 API 模型 ID。
+        运行时可以添加变体映射（如 glm-4.6-nothinking -> glm-4.6）。
+        
+        :return: 反向映射字典 {客户端模型ID: 上游模型ID或基础模型ID}
+        :rtype: dict[str, str]
+        
+        .. code-block:: python
+        
+           # 静态映射: MODELS_MAPPING = {"GLM-4-6-API-V1": "glm-4.6"}
+           # 初始反向映射: {"glm-4.6": "GLM-4-6-API-V1"}
+           
+           # 运行时添加变体映射
+           settings.REVERSE_MODELS_MAPPING["glm-4.6-nothinking"] = "glm-4.6"
+           
+           # 映射链: glm-4.6-nothinking -> glm-4.6 -> GLM-4-6-API-V1
+        """
+        return self._reverse_models_mapping
+
+    @field_validator("proxy_url")
+    @classmethod
+    def validate_proxy_url(cls, v: str) -> str:
+        """验证代理 URL 格式"""
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("proxy_url 必须以 http:// 或 https:// 开头")
+        return v
 
 
 @lru_cache
@@ -225,4 +289,8 @@ def get_settings() -> AppConfig:
         >>> settings = get_settings()
         >>> print(settings.host, settings.port)
     """
+    # 在生产环境中，secret_key 必须通过环境变量提供
+    # 在开发环境中，为了方便测试，如果未设置环境变量，则提供一个默认值
+    if os.getenv("APP_ENV") == "development" and "SECRET_KEY" not in os.environ:
+        os.environ["SECRET_KEY"] = "default_dev_secret_key_for_testing"
     return AppConfig()
