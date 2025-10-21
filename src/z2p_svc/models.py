@@ -147,44 +147,17 @@ class UpstreamModelsResponse(BaseModel):
     data: List[UpstreamModel]
 
 
-# --- Downstream Models ---
-class DownstreamCapability(BaseModel):
-    """下游模型能力配置。"""
-    vision: bool = False
-    citations: bool = False
-    preview_mode: bool = False
-    web_search: bool = False
-    language_detection: bool = False
-    restore_n_source: bool = False
-    mcp: bool = False
-    file_qa: bool = False
-    returnFc: bool = False
-    returnThink: bool = False
-    think: bool = False
-
-
-class DownstreamMeta(BaseModel):
-    """下游模型元数据。"""
-    profile_image_url: Optional[str] = None
-    description: Optional[str] = None
-    capabilities: Optional[DownstreamCapability] = None
-    suggestion_prompts: Optional[List[Dict[str, Any]]] = None
-    hidden: Optional[bool] = None
-
-
+# --- Downstream Models (OpenAI Compatible) ---
 class DownstreamModel(BaseModel):
-    """下游模型定义。"""
+    """下游模型定义（OpenAI 兼容）。"""
     id: str
     object: str = "model"
     created: int
-    owned_by: str = "z.ai"
     name: str
-    meta: Optional[DownstreamMeta] = None
-    info: Optional[Dict[str, Any]] = None
-    original: Optional[Dict[str, Any]] = None
+    owned_by: str = "z.ai"
 
 
 class DownstreamModelsResponse(BaseModel):
-    """下游模型列表响应。"""
+    """下游模型列表响应（OpenAI 兼容）。"""
     object: str = "list"
     data: List[DownstreamModel]

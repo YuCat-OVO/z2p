@@ -16,8 +16,6 @@ from .models import (
     UpstreamModel,
     DownstreamModelsResponse,
     DownstreamModel,
-    DownstreamMeta,
-    DownstreamCapability,
 )
 
 logger = get_logger(__name__)
@@ -256,32 +254,13 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
             processed_name
         )
         
-        # 提取并简化 suggestion_prompts
-        simplified_suggestion_prompts = []
-        if model_meta and model_meta.suggestion_prompts:
-            for sp in model_meta.suggestion_prompts:
-                if sp.prompts:
-                    for p in sp.prompts:
-                        simplified_suggestion_prompts.append({"content": p.prompt})
-        
-        base_capabilities = model_meta.capabilities.model_dump() if model_meta and model_meta.capabilities else {}
-        
-        # 创建基础模型
+        # 创建基础模型（OpenAI 兼容格式）
         base_downstream_model = DownstreamModel(
             id=processed_id,
             object="model",
             name=processed_name,
             created=model_info.created_at or int(datetime.now().timestamp()),
             owned_by="z.ai",
-            meta=DownstreamMeta(
-                profile_image_url=(model_meta.profile_image_url if model_meta else None) or default_logo,
-                description=model_meta.description if model_meta else None,
-                capabilities=DownstreamCapability(**base_capabilities),
-                suggestion_prompts=simplified_suggestion_prompts,
-                hidden=model_meta.hidden if model_meta else None
-            ),
-            info=model_info.model_dump(),
-            original=m.model_dump()
         )
         downstream_models.append(base_downstream_model)
         
@@ -324,30 +303,14 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
                 if should_generate_variant and not already_has_feature:
                     variant_id = f"{processed_id}{feature_config['suffix']}"
                     variant_name = f"{processed_name}{feature_config['name_suffix']}"
-                    variant_description = f"{model_meta.description or ''} {feature_config['description_suffix']}".strip()
                     
-                    # 创建新的 capabilities 字典，并根据变体类型修改对应功能
-                    variant_capabilities_dict = base_capabilities.copy()
-                    if feature_config.get("negate", False):
-                        variant_capabilities_dict[feature_key] = False  # 禁用该功能
-                    else:
-                        variant_capabilities_dict[feature_key] = True  # 确保启用该功能
-                    
+                    # 创建变体模型（OpenAI 兼容格式）
                     variant_downstream_model = DownstreamModel(
                         id=variant_id,
                         object="model",
                         name=variant_name,
                         created=model_info.created_at or int(datetime.now().timestamp()),
                         owned_by="z.ai",
-                        meta=DownstreamMeta(
-                            profile_image_url=(model_meta.profile_image_url if model_meta else None) or default_logo,
-                            description=variant_description,
-                            capabilities=DownstreamCapability(**variant_capabilities_dict),
-                            suggestion_prompts=simplified_suggestion_prompts,
-                            hidden=model_meta.hidden if model_meta else None
-                        ),
-                        info=model_info.model_dump(),
-                        original=m.model_dump()
                     )
                     downstream_models.append(variant_downstream_model)
                     
