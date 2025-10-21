@@ -43,7 +43,8 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
     
     Example::
     
-        >>> cookies = await fetch_acw_tc_cookie("token")
+        >>> import asyncio
+        >>> cookies = asyncio.run(fetch_acw_tc_cookie("token"))
         >>> print(cookies.get("acw_tc"))
     """
     chat_page_url = f"{settings.proxy_url}"
@@ -103,7 +104,8 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
     
     Example::
     
-        >>> user_id, auth_token, user_name, cookies = await authenticate_with_cookies("your_token")
+        >>> import asyncio
+        >>> user_id, auth_token, user_name, cookies = asyncio.run(authenticate_with_cookies("your_token"))
         >>> print(cookies.get("acw_tc"))
         >>> print(auth_token)
     """
@@ -198,7 +200,8 @@ async def get_user_info(access_token: str, chat_id: str | None = None) -> UserIn
     
     Example::
     
-        >>> user_info = await get_user_info("your_token_here", "chat-id")
+        >>> import asyncio
+        >>> user_info = asyncio.run(get_user_info("your_token_here", "chat-id"))
         >>> print(user_info["user_id"])
         >>> print(user_info["cookies"])
     
