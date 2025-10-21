@@ -262,6 +262,8 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
     - nothinking: 禁用深度思考
     - search: 启用网络搜索
     - advanced-search: 启用高级搜索（包含MCP服务器）
+    - fileqa: 启用文件问答
+    - mcp: 启用MCP工具
 
     :param model: 模型名称（客户端请求的模型ID，可能包含功能后缀）
     :param streaming: 是否为流式请求

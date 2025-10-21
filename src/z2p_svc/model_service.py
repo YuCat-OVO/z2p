@@ -256,10 +256,8 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
             source_id
         )
         
-        # 只为已映射的模型生成变体
-        is_mapped_model = source_id in settings.MODELS_MAPPING
-        
-        if is_mapped_model and model_meta and model_meta.capabilities:
+        # 为所有激活的模型生成变体（不再限制只为已映射的模型生成）
+        if model_meta and model_meta.capabilities:
             for feature_key, feature_config in FEATURE_SWITCHES.items():
                 is_enabled = getattr(model_meta.capabilities, feature_key, False)
                 

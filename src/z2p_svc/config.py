@@ -54,7 +54,7 @@ class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=_get_env_files(),
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="allow",
         case_sensitive=False,
     )
 
@@ -200,10 +200,9 @@ class AppConfig(BaseSettings):
             "0727-360B-API": "glm-4.5",
         }
 
-    @property
-    def REVERSE_MODELS_MAPPING(self) -> dict[str, str]:
-        """反向模型名称映射。"""
-        return {
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.REVERSE_MODELS_MAPPING: dict[str, str] = {
             "glm-4.6": "GLM-4-6-API-V1",
             "glm-4.6-nothinking": "GLM-4-6-API-V1",
             "glm-4.6-search": "GLM-4-6-API-V1",
