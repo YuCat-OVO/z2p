@@ -11,12 +11,11 @@
 """
 
 import base64
-import io
 import re # 导入 re 模块
 import uuid
 from typing import Any
 
-import httpx
+from curl_cffi.requests import AsyncSession
 
 from .config import get_settings
 from .exceptions import FileUploadError
@@ -243,10 +242,6 @@ class FileUploader:
             logger.error("File validation failed: filename={}, error={}", filename, str(e))
             return None
 
-        # 将文件数据包装为类文件对象以便上传
-        file_obj = io.BytesIO(file_data)
-        files = {"file": (filename, file_obj, mime_type)}
-        
         logger.info(
             "Starting file upload: filename={}, size={} bytes, mime_type={}, upload_url={}",
             filename,
@@ -264,16 +259,45 @@ class FileUploader:
             )
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
+            # curl_cffi 需要使用 CurlMime 对象来上传文件
+            # 导入 CurlMime
+            from curl_cffi import CurlMime
+            
+            async with AsyncSession(impersonate=self.settings.get_browser_version()) as session:  # type: ignore
+                # 创建 multipart 对象
+                multipart = CurlMime()
+                multipart.addpart(
+                    name="file",
+                    content_type=mime_type,
+                    data=file_data,
+                    filename=filename
+                )
+                
+                response = await session.post(
                     self.upload_url,
                     headers=self._get_headers(),
-                    files=files,
+                    multipart=multipart,
                     timeout=30.0,
                 )
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    logger.error(
+                        "Upload HTTP error: filename={}, status_code={}, response={}",
+                        filename,
+                        response.status_code,
+                        response.text[:500] if hasattr(response, 'text') else str(response.content)[:500]
+                    )
+                    raise Exception(f"HTTP {response.status_code}")
 
                 result = response.json()
+                
+                if self.settings.verbose_logging:
+                    logger.debug(
+                        "Upload response received: filename={}, status_code={}, response={}",
+                        filename,
+                        response.status_code,
+                        result
+                    )
+                
                 file_id = result.get("id")
                 file_filename = result.get("filename", filename)
                 cdn_url = result.get("meta", {}).get("cdn_url")
@@ -304,15 +328,6 @@ class FileUploader:
                     logger.error("Upload response missing data: response={}", result)
                     return None
 
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Upload HTTP error: filename={}, status_code={}, response_text={}, upload_url={}",
-                filename,
-                e.response.status_code,
-                e.response.text[:200],
-                self.upload_url,
-            )
-            return None
         except Exception as e:
             logger.error(
                 "Upload failed: filename={}, error_type={}, error={}, upload_url={}",
@@ -337,9 +352,10 @@ class FileUploader:
         try:
             logger.info("Starting file download from URL: url={}", file_url)
             
-            async with httpx.AsyncClient() as client:
-                response = await client.get(file_url, timeout=30.0)
-                response.raise_for_status()
+            async with AsyncSession(impersonate=self.settings.get_browser_version()) as session:  # type: ignore
+                response = await session.get(file_url, timeout=30.0)
+                if response.status_code >= 400:
+                    raise Exception(f"HTTP {response.status_code}")
 
                 filename = file_url.split("/")[-1]
                 if not filename or "." not in filename:
@@ -373,21 +389,6 @@ class FileUploader:
 
                 return await self.upload_base64_file(base64_data, filename, file_type=mime_type.split('/')[-1])
 
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Download HTTP error: url={}, status_code={}, response_text={}",
-                file_url,
-                e.response.status_code,
-                e.response.text[:200] if hasattr(e.response, 'text') else 'N/A',
-            )
-            return None
-        except httpx.TimeoutException as e:
-            logger.error(
-                "Download timeout: url={}, timeout=30s, error={}",
-                file_url,
-                str(e),
-            )
-            return None
         except Exception as e:
             logger.error(
                 "Download failed: url={}, error_type={}, error={}",

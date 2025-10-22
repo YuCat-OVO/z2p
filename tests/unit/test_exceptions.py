@@ -21,82 +21,82 @@ from src.z2p_svc.exceptions import (
 @pytest.mark.unit
 class TestUpstreamAPIError:
     """UpstreamAPIError 基础异常测试。"""
-    
+
     def test_basic_initialization(self):
         """测试基本初始化。"""
         error = UpstreamAPIError(500, "Server error")
-        
+
         assert error.status_code == 500
         assert error.message == "Server error"
         assert error.error_type == "upstream_error"
         assert str(error) == "Server error"
-    
+
     def test_custom_error_type(self):
         """测试自定义错误类型。"""
         error = UpstreamAPIError(400, "Bad request", "custom_error")
-        
+
         assert error.error_type == "custom_error"
-    
+
     def test_inheritance_from_exception(self):
         """测试继承自 Exception。"""
         error = UpstreamAPIError(500, "Error")
-        
+
         assert isinstance(error, Exception)
 
 
 @pytest.mark.unit
 class TestAuthenticationError:
     """AuthenticationError 认证错误测试。"""
-    
+
     def test_default_values(self):
         """测试默认值。"""
         error = AuthenticationError()
-        
+
         assert error.status_code == 401
         assert error.message == "认证失败"
         assert error.error_type == "authentication_error"
-    
+
     def test_custom_message(self):
         """测试自定义消息。"""
         error = AuthenticationError("Invalid token")
-        
+
         assert error.message == "Invalid token"
         assert error.status_code == 401
-    
+
     def test_custom_status_code(self):
         """测试自定义状态码。"""
         error = AuthenticationError("Error", status_code=403)
-        
+
         assert error.status_code == 403
 
 
 @pytest.mark.unit
 class TestFileUploadError:
     """FileUploadError 文件上传错误测试。"""
-    
+
     def test_default_values(self):
         """测试默认值。"""
         error = FileUploadError()
-        
+
         assert error.status_code == 400
         assert error.message == "文件上传失败"
         assert error.error_type == "file_upload_error"
-    
+
     def test_custom_message(self):
         """测试自定义消息。"""
         error = FileUploadError("File too large")
-        
+
         assert error.message == "File too large"
 
 
 @pytest.mark.unit
 class TestRateLimitError:
     """RateLimitError 速率限制错误测试。"""
-    
+
     def test_default_values(self):
         """测试默认值。"""
         error = RateLimitError()
-        
+
         assert error.status_code == 429
         assert error.message == "请求过于频繁"
         assert error.error_type == "rate_limit_error"
@@ -105,11 +105,11 @@ class TestRateLimitError:
 @pytest.mark.unit
 class TestBadRequestError:
     """BadRequestError 请求参数错误测试。"""
-    
+
     def test_default_values(self):
         """测试默认值。"""
         error = BadRequestError()
-        
+
         assert error.status_code == 400
         assert error.message == "请求参数错误"
         assert error.error_type == "bad_request_error"
@@ -118,11 +118,11 @@ class TestBadRequestError:
 @pytest.mark.unit
 class TestPermissionError:
     """PermissionError 权限错误测试。"""
-    
+
     def test_default_values(self):
         """测试默认值。"""
         error = PermissionError()
-        
+
         assert error.status_code == 403
         assert error.message == "权限不足"
         assert error.error_type == "permission_error"
@@ -131,11 +131,11 @@ class TestPermissionError:
 @pytest.mark.unit
 class TestMethodNotAllowedError:
     """MethodNotAllowedError 方法不允许错误测试。"""
-    
+
     def test_default_values(self):
         """测试默认值。"""
         error = MethodNotAllowedError()
-        
+
         assert error.status_code == 405
         assert error.message == "请求方法不允许"
         assert error.error_type == "method_not_allowed_error"
@@ -144,11 +144,11 @@ class TestMethodNotAllowedError:
 @pytest.mark.unit
 class TestServerError:
     """ServerError 服务器错误测试。"""
-    
+
     def test_default_values(self):
         """测试默认值。"""
         error = ServerError()
-        
+
         assert error.status_code == 500
         assert error.message == "上游服务器错误"
         assert error.error_type == "server_error"
@@ -157,16 +157,16 @@ class TestServerError:
 @pytest.mark.unit
 class TestIsAliyunBlockedResponse:
     """is_aliyun_blocked_response 函数测试。"""
-    
+
     def test_empty_response(self):
         """测试空响应。"""
         assert is_aliyun_blocked_response("") is False
-    
+
     def test_normal_response(self):
         """测试正常响应。"""
         normal_html = "<html><body>Normal content</body></html>"
         assert is_aliyun_blocked_response(normal_html) is False
-    
+
     def test_aliyun_blocked_response_with_multiple_indicators(self):
         """测试包含多个阿里云拦截特征的响应。"""
         blocked_html = """
@@ -178,7 +178,7 @@ class TestIsAliyunBlockedResponse:
         </html>
         """
         assert is_aliyun_blocked_response(blocked_html) is True
-    
+
     def test_aliyun_blocked_response_with_error_image(self):
         """测试包含阿里云错误图片的响应。"""
         blocked_html = """
@@ -190,12 +190,12 @@ class TestIsAliyunBlockedResponse:
         </html>
         """
         assert is_aliyun_blocked_response(blocked_html) is True
-    
+
     def test_single_indicator_not_enough(self):
         """测试单个特征不足以判定为拦截。"""
         html_with_one_indicator = '<div data-spm="something">Content</div>'
         assert is_aliyun_blocked_response(html_with_one_indicator) is False
-    
+
     def test_chinese_warning_message(self):
         """测试中文警告消息。"""
         blocked_html = """
@@ -206,7 +206,7 @@ class TestIsAliyunBlockedResponse:
         </html>
         """
         assert is_aliyun_blocked_response(blocked_html) is True
-    
+
     def test_english_warning_message(self):
         """测试英文警告消息。"""
         blocked_html = """
@@ -218,7 +218,7 @@ class TestIsAliyunBlockedResponse:
         </html>
         """
         assert is_aliyun_blocked_response(blocked_html) is True
-    
+
     def test_case_sensitivity(self):
         """测试大小写敏感性。"""
         # 特征检测应该是大小写敏感的
@@ -239,7 +239,7 @@ class TestIsAliyunBlockedResponse:
 @pytest.mark.unit
 class TestExceptionHierarchy:
     """异常继承层次测试。"""
-    
+
     def test_all_custom_errors_inherit_from_upstream_api_error(self):
         """测试所有自定义错误都继承自 UpstreamAPIError。"""
         errors = [
@@ -251,11 +251,11 @@ class TestExceptionHierarchy:
             MethodNotAllowedError(),
             ServerError(),
         ]
-        
+
         for error in errors:
             assert isinstance(error, UpstreamAPIError)
             assert isinstance(error, Exception)
-    
+
     def test_error_attributes_consistency(self):
         """测试错误属性一致性。"""
         errors = [

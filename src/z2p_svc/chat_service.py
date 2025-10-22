@@ -10,7 +10,6 @@ import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator
 
-
 from .config import get_settings
 from .file_uploader import FileUploader
 from .logger import get_logger
@@ -115,7 +114,7 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
 
 
 async def prepare_request_data(
-    chat_request: ChatRequest, access_token: str, streaming: bool = True
+    chat_request: ChatRequest, access_token: str, streaming: bool = True, user_agent: str = ""
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """准备上游 API 请求数据。
     
@@ -223,7 +222,7 @@ async def prepare_request_data(
                 "Model mapping chain: {}",
                 " -> ".join(mapping_chain)
             )
-    else:
+    elif chat_request.model not in settings.REVERSE_MODELS_MAPPING:
         logger.warning(
             "No reverse mapping found for model={}, using original ID. This may cause upstream API errors.",
             chat_request.model
@@ -519,7 +518,7 @@ async def prepare_request_data(
         user_id=user_id,
         token=auth_token,
         version=settings.HEADERS["X-FE-Version"],
-        user_agent=settings.HEADERS["User-Agent"],
+        user_agent=user_agent,  # 从调用方传入的User-Agent（来自curl_cffi session）
         language=user_language,
         languages=chat_request.accept_language or "zh-CN",
     )

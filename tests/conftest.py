@@ -9,7 +9,12 @@ from typing import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
-from httpx import AsyncClient
+
+# 修复 Windows 上 curl_cffi 的事件循环警告
+if sys.platform == "win32":
+    import asyncio
+
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # 在导入任何模块之前设置必需的环境变量
 os.environ.setdefault("APP_ENV", "development")
@@ -27,7 +32,7 @@ from src.z2p_svc.config import AppConfig
 @pytest.fixture(scope="session")
 def test_settings() -> AppConfig:
     """测试环境配置。
-    
+
     提供隔离的测试配置，避免影响生产环境。
     """
     os.environ["APP_ENV"] = "development"
@@ -35,7 +40,7 @@ def test_settings() -> AppConfig:
     os.environ["PROXY_URL"] = "https://test.example.com"
     os.environ["LOG_LEVEL"] = "DEBUG"
     os.environ["VERBOSE_LOGGING"] = "false"
-    
+
     return AppConfig()
 
 
@@ -71,23 +76,22 @@ def mock_request_id() -> str:
 
 @pytest.fixture
 def mock_httpx_client() -> AsyncMock:
-    """模拟 httpx.AsyncClient。
-    
-    提供预配置的 AsyncClient mock，用于测试 HTTP 请求。
+    """模拟 curl_cffi AsyncSession。
+
+    提供预配置的 AsyncSession mock，用于测试 HTTP 请求。
     """
-    client = AsyncMock(spec=AsyncClient)
-    
+    client = AsyncMock()
+
     # 配置默认响应
     mock_response = AsyncMock()
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={"data": []})
     mock_response.text = ""
     mock_response.headers = {}
-    
+
     client.get = AsyncMock(return_value=mock_response)
     client.post = AsyncMock(return_value=mock_response)
-    client.stream = AsyncMock()
-    
+
     return client
 
 
@@ -98,12 +102,12 @@ def sample_chat_request_data() -> dict:
         "model": "glm-4.6",
         "messages": [
             {"role": "system", "content": "你是一个有帮助的助手。"},
-            {"role": "user", "content": "你好，请介绍一下自己。"}
+            {"role": "user", "content": "你好，请介绍一下自己。"},
         ],
         "stream": False,
         "temperature": 0.7,
         "top_p": 0.9,
-        "max_tokens": 2048
+        "max_tokens": 2048,
     }
 
 
@@ -129,13 +133,8 @@ def sample_models_response() -> dict:
                 "info": {
                     "id": "GLM-4-6-API-V1",
                     "name": "GLM-4.6",
-                    "meta": {
-                        "capabilities": {
-                            "think": True,
-                            "web_search": False
-                        }
-                    }
-                }
+                    "meta": {"capabilities": {"think": True, "web_search": False}},
+                },
             },
             {
                 "id": "glm-4.5",
@@ -145,15 +144,10 @@ def sample_models_response() -> dict:
                 "info": {
                     "id": "0727-360B-API",
                     "name": "GLM-4.5",
-                    "meta": {
-                        "capabilities": {
-                            "think": False,
-                            "web_search": False
-                        }
-                    }
-                }
-            }
-        ]
+                    "meta": {"capabilities": {"think": False, "web_search": False}},
+                },
+            },
+        ],
     }
 
 
@@ -165,7 +159,7 @@ def sample_file_upload_response() -> dict:
         "name": "test_image.png",
         "media": "image",
         "size": 1024,
-        "url": "https://example.com/files/file_12345"
+        "url": "https://example.com/files/file_12345",
     }
 
 
@@ -180,18 +174,11 @@ def sample_chat_completion_response() -> dict:
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "你好！我是一个AI助手。"
-                },
-                "finish_reason": "stop"
+                "message": {"role": "assistant", "content": "你好！我是一个AI助手。"},
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 20,
-            "completion_tokens": 15,
-            "total_tokens": 35
-        }
+        "usage": {"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35},
     }
 
 
@@ -206,13 +193,10 @@ def sample_chat_completion_chunk() -> dict:
         "choices": [
             {
                 "index": 0,
-                "delta": {
-                    "role": "assistant",
-                    "content": "你好"
-                },
-                "finish_reason": None
+                "delta": {"role": "assistant", "content": "你好"},
+                "finish_reason": None,
             }
-        ]
+        ],
     }
 
 
@@ -220,39 +204,43 @@ def sample_chat_completion_chunk() -> dict:
 def mock_file_uploader() -> AsyncMock:
     """模拟文件上传器。"""
     uploader = AsyncMock()
-    uploader.upload_base64_file = AsyncMock(return_value={
-        "id": "file_12345",
-        "name": "test_file.png",
-        "media": "image",
-        "size": 1024
-    })
-    uploader.upload_file_from_url = AsyncMock(return_value={
-        "id": "file_67890",
-        "name": "remote_file.jpg",
-        "media": "image",
-        "size": 2048
-    })
+    uploader.upload_base64_file = AsyncMock(
+        return_value={
+            "id": "file_12345",
+            "name": "test_file.png",
+            "media": "image",
+            "size": 1024,
+        }
+    )
+    uploader.upload_file_from_url = AsyncMock(
+        return_value={
+            "id": "file_67890",
+            "name": "remote_file.jpg",
+            "media": "image",
+            "size": 2048,
+        }
+    )
     return uploader
 
 
 @pytest.fixture
 def mock_signature_generator() -> Mock:
     """模拟签名生成器。"""
+
     def generate_signature_mock(request_params: str, content: str) -> dict:
-        return {
-            "signature": "mock_signature_abcdef123456",
-            "timestamp": 1234567890000
-        }
+        return {"signature": "mock_signature_abcdef123456", "timestamp": 1234567890000}
+
     return Mock(side_effect=generate_signature_mock)
 
 
 @pytest.fixture(autouse=True)
 def reset_lru_cache():
     """自动重置 LRU 缓存。
-    
+
     确保每个测试都有干净的缓存状态。
     """
     from src.z2p_svc.config import get_settings
+
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -272,12 +260,13 @@ def mock_logger() -> Mock:
 
 # 异步测试辅助 fixtures
 @pytest.fixture
-async def async_client() -> AsyncGenerator[AsyncClient, None]:
+async def async_client() -> AsyncGenerator:
     """异步 HTTP 客户端。
     
     用于集成测试和端到端测试。
     """
-    async with AsyncClient() as client:
+    from curl_cffi.requests import AsyncSession
+    async with AsyncSession() as client:
         yield client
 
 

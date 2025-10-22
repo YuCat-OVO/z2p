@@ -4,7 +4,7 @@
 """
 
 import json
-import httpx
+from typing import Any
 
 from ..logger import get_logger
 from ..proxy_manager import switch_proxy_node
@@ -16,7 +16,7 @@ settings = get_settings()
 
 
 async def handle_upstream_error(
-    response: httpx.Response,
+    response: Any,
     request_id: str,
     user_id: str,
     timestamp: str,
@@ -39,7 +39,7 @@ async def handle_upstream_error(
     :param timestamp: 时间戳
     :param model: 模型 ID
     :param is_streaming: 是否为流式请求
-    :type response: httpx.Response
+    :type response: Any
     :type request_id: str
     :type user_id: str
     :type timestamp: str
@@ -51,8 +51,13 @@ async def handle_upstream_error(
        检测到阿里云拦截时，如果启用了 Mihomo 代理切换
        (``ENABLE_MIHOMO_SWITCH=true``)，会自动切换代理节点
     """
-    error_content = await response.aread()
-    error_text = error_content.decode("utf-8", errors="ignore")
+    if hasattr(response, "aread"):
+        error_content = await response.aread()
+        error_text = error_content.decode("utf-8", errors="ignore")
+    else:
+        error_text = (
+            response.text if hasattr(response, "text") else str(response.content)
+        )
 
     # 检测阿里云拦截
     if response.status_code == 405 and is_aliyun_blocked_response(error_text):

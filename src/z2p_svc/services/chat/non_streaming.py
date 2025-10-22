@@ -9,17 +9,18 @@ import codecs
 from datetime import datetime
 from typing import Any
 
-import httpx
+from curl_cffi.requests import AsyncSession
 
 # 尝试使用 orjson 加速 JSON 操作
 try:
     import orjson
-    
+
     def json_loads(s: str) -> dict:
         """使用 orjson 快速反序列化"""
         return orjson.loads(s)
 except ImportError:
     import json
+
     json_loads = json.loads
 
 from ...config import get_settings
@@ -40,8 +41,8 @@ settings = get_settings()
 # 预编译正则表达式
 QUERIES_PATTERN = re.compile(r'"queries":\s*\[(.*?)\]')
 QUERY_ITEMS_PATTERN = re.compile(r'"([^"]+)"')
-SUMMARY_SPLIT_PATTERN = re.compile(r'</summary>\n>')
-DETAILS_SPLIT_PATTERN = re.compile(r'</details>\n')
+SUMMARY_SPLIT_PATTERN = re.compile(r"</summary>\n>")
+DETAILS_SPLIT_PATTERN = re.compile(r"</details>\n")
 
 
 async def process_non_streaming_response(
@@ -58,51 +59,58 @@ async def process_non_streaming_response(
     .. note::
        响应格式遵循OpenAI的非流式API规范。
     """
-    zai_data, params, headers = await prepare_request_data_func(
-        chat_request, access_token, False
-    )
-    full_response = ""
-    reasoning_content = ""
-    usage_info = {
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "total_tokens": 0,
-    }
+    async with AsyncSession(impersonate=settings.get_browser_version()) as session:  # type: ignore
+        # 从session获取curl_cffi自动设置的User-Agent
+        user_agent = session.headers.get("User-Agent", "")
 
-    request_id = params.get("requestId", "unknown")
-    user_id = params.get("user_id", "unknown")
-    timestamp = params.get("timestamp", "unknown")
-
-    logger.info(
-        "Non-streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
-        request_id,
-        user_id,
-        chat_request.model,
-        f"{settings.proxy_url}/api/chat/completions",
-    )
-
-    if settings.verbose_logging:
-        logger.debug(
-            "Non-streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
-            request_id,
-            f"{settings.proxy_url}/api/chat/completions",
-            {
-                k: v if k.lower() != "authorization" else v[:20] + "..."
-                for k, v in headers.items()
-            },
-            params,
-            zai_data,
+        # 准备请求数据，传入User-Agent
+        zai_data, params, headers = await prepare_request_data_func(
+            chat_request, access_token, streaming=False, user_agent=user_agent
         )
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+        full_response = ""
+        reasoning_content = ""
+        usage_info = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+        request_id = params.get("requestId", "unknown")
+        user_id = params.get("user_id", "unknown")
+        timestamp = params.get("timestamp", "unknown")
+
+        logger.info(
+            "Non-streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
+            request_id,
+            user_id,
+            chat_request.model,
+            f"{settings.proxy_url}/api/chat/completions",
+        )
+
+        if settings.verbose_logging:
+            logger.debug(
+                "Non-streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
+                request_id,
+                f"{settings.proxy_url}/api/chat/completions",
+                {
+                    k: v if k.lower() != "authorization" else v[:20] + "..."
+                    for k, v in headers.items()
+                },
+                params,
+                zai_data,
+            )
+
         try:
-            async with client.stream(
-                method="POST",
-                url=f"{settings.proxy_url}/api/chat/completions",
+            response = await session.post(
+                f"{settings.proxy_url}/api/chat/completions",
                 headers=headers,
                 params=params,
                 json=zai_data,
-            ) as response:
+                timeout=300.0,
+                stream=True,
+            )
+            try:
                 if response.status_code != 200:
                     await handle_upstream_error(
                         response,
@@ -123,31 +131,40 @@ async def process_non_streaming_response(
                 chunk_count = 0
 
                 async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
+                    if not line:
+                        continue
+
+                    # curl_cffi返回bytes，需要解码
+                    if isinstance(line, bytes):
+                        line = line.decode("utf-8")
+
+                    if not line.startswith("data:"):
                         continue
 
                     json_str = line[6:]
-                    
+
                     # 输出原始SSE数据块
                     if settings.verbose_logging:
                         logger.debug(
                             "Non-streaming SSE line: request_id={}, data={}",
                             request_id,
-                            json_str[:300]
+                            json_str[:300],
                         )
-                    
+
                     if not json_str or json_str in ("[DONE]", "DONE", "done"):
                         if json_str in ("[DONE]", "DONE", "done"):
                             logger.info(
                                 "Non-streaming [DONE] received: request_id={}",
-                                request_id
+                                request_id,
                             )
                         break
 
                     try:
                         json_object = json_loads(json_str)
                     except Exception:
-                        logger.warning("Invalid JSON in non-stream: line={}", line[:100])
+                        logger.warning(
+                            "Invalid JSON in non-stream: line={}", line[:100]
+                        )
                         continue
 
                     if json_object.get("type") != "chat:completion":
@@ -165,28 +182,41 @@ async def process_non_streaming_response(
                             logger.debug(
                                 "Non-streaming usage received: request_id={}, usage={}",
                                 request_id,
-                                usage_info
+                                usage_info,
                             )
 
                     # 处理tool_call阶段（使用预编译正则）
                     if phase == "tool_call":
-                        if edit_content and "<glm_block" in edit_content and "search" in edit_content:
+                        if (
+                            edit_content
+                            and "<glm_block" in edit_content
+                            and "search" in edit_content
+                        ):
                             try:
                                 decoded = edit_content
                                 try:
-                                    decoded = edit_content.encode('utf-8').decode('unicode_escape').encode('latin1').decode('utf-8')
+                                    decoded = (
+                                        edit_content.encode("utf-8")
+                                        .decode("unicode_escape")
+                                        .encode("latin1")
+                                        .decode("utf-8")
+                                    )
                                 except:
                                     try:
-                                        decoded = codecs.decode(edit_content, 'unicode_escape')
+                                        decoded = codecs.decode(
+                                            edit_content, "unicode_escape"
+                                        )
                                     except:
                                         pass
-                                
+
                                 queries_match = QUERIES_PATTERN.search(decoded)
                                 if queries_match:
                                     queries_str = queries_match.group(1)
                                     queries = QUERY_ITEMS_PATTERN.findall(queries_str)
                                     if queries:
-                                        search_info = "🔍 **搜索：** " + "　".join(queries[:5])
+                                        search_info = "🔍 **搜索：** " + "　".join(
+                                            queries[:5]
+                                        )
                                         reasoning_content += f"\n\n{search_info}\n\n"
                             except Exception:
                                 pass
@@ -197,7 +227,9 @@ async def process_non_streaming_response(
                         if delta_content:
                             if delta_content.startswith("<details"):
                                 cleaned = (
-                                    SUMMARY_SPLIT_PATTERN.split(delta_content)[-1].strip()
+                                    SUMMARY_SPLIT_PATTERN.split(delta_content)[
+                                        -1
+                                    ].strip()
                                     if "</summary>\n>" in delta_content
                                     else delta_content
                                 )
@@ -209,20 +241,22 @@ async def process_non_streaming_response(
                                 logger.debug(
                                     "Non-streaming thinking chunk: request_id={}, content={}",
                                     request_id,
-                                    cleaned[:200]
+                                    cleaned[:200],
                                 )
-                    
+
                     # 答案阶段（使用预编译正则）
                     elif phase == "answer":
                         if edit_content and "</details>\n" in edit_content:
-                            content_after = DETAILS_SPLIT_PATTERN.split(edit_content)[-1]
+                            content_after = DETAILS_SPLIT_PATTERN.split(edit_content)[
+                                -1
+                            ]
                             if content_after:
                                 full_response += content_after
                                 if settings.verbose_logging:
                                     logger.debug(
                                         "Non-streaming answer chunk (from edit): request_id={}, length={}",
                                         request_id,
-                                        len(content_after)
+                                        len(content_after),
                                     )
                         elif delta_content:
                             full_response += delta_content
@@ -230,10 +264,10 @@ async def process_non_streaming_response(
                                 logger.debug(
                                     "Non-streaming answer chunk: request_id={}, length={}",
                                     request_id,
-                                    len(delta_content)
+                                    len(delta_content),
                                 )
                         chunk_count += 1
-                    
+
                     # other阶段
                     elif phase == "other":
                         if delta_content:
@@ -242,66 +276,73 @@ async def process_non_streaming_response(
                                 logger.debug(
                                     "Non-streaming other chunk: request_id={}, content={}",
                                     request_id,
-                                    delta_content[:200]
+                                    delta_content[:200],
                                 )
                         chunk_count += 1
                         # 检查是否有done标记，如果有则结束
                         if data.get("done"):
                             logger.info(
                                 "Non-streaming done in other phase: request_id={}",
-                                request_id
+                                request_id,
                             )
                             break
-                    
+
                     # done阶段
                     elif phase == "done":
                         logger.info(
-                            "Non-streaming done signal: request_id={}",
-                            request_id
+                            "Non-streaming done signal: request_id={}", request_id
                         )
                         break
 
+            finally:
+                await response.aclose()
         except UpstreamAPIError:
             raise
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Unexpected HTTP status error (non-streaming): status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
-                e.response.status_code,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                e.response.status_code,
-                f"HTTP错误 {e.response.status_code}",
-                "http_error",
-            ) from e
-        except httpx.RequestError as e:
-            logger.error(
-                "Upstream request error (non-streaming): error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(500, f"请求错误: {str(e)}", "request_error") from e
         except Exception as e:
-            logger.error(
-                "Unexpected error (non-streaming): error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(500, f"未知错误: {str(e)}", "unknown_error") from e
+            if "status" in str(type(e).__name__).lower() or "HTTP" in str(e):
+                status_code = getattr(e, "status_code", 500)
+                logger.error(
+                    "Unexpected HTTP status error (non-streaming): status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
+                    status_code,
+                    str(e),
+                    request_id,
+                    user_id,
+                    timestamp,
+                )
+                raise UpstreamAPIError(
+                    status_code,
+                    f"HTTP错误 {status_code}",
+                    "http_error",
+                ) from e
+            elif "request" in str(type(e).__name__).lower():
+                logger.error(
+                    "Upstream request error (non-streaming): error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
+                    type(e).__name__,
+                    str(e),
+                    request_id,
+                    user_id,
+                    timestamp,
+                )
+                raise UpstreamAPIError(
+                    500, f"请求错误: {str(e)}", "request_error"
+                ) from e
+            else:
+                logger.error(
+                    "Unexpected error (non-streaming): error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
+                    type(e).__name__,
+                    str(e),
+                    request_id,
+                    user_id,
+                    timestamp,
+                )
+                raise UpstreamAPIError(
+                    500, f"未知错误: {str(e)}", "unknown_error"
+                ) from e
 
     # 清理并返回
     full_response = (full_response or "").strip()
     reasoning_content = (reasoning_content or "").strip()
-    
+
     # 若没有聚合到答案，但有思考内容，则保底返回思考内容
     if not full_response and reasoning_content:
         full_response = reasoning_content

@@ -11,7 +11,7 @@
 如需恢复认证机制，请在 chat_service.py 中的 prepare_request_data 函数中重新启用对 get_user_info 的调用。
 """
 
-import httpx
+from curl_cffi.requests import AsyncSession
 from typing import TypedDict
 
 from .config import get_settings
@@ -54,11 +54,12 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
     }
     
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(
+        async with AsyncSession(impersonate=settings.get_browser_version()) as session:  # type: ignore
+            response = await session.get(
                 chat_page_url,
                 headers=headers,
                 timeout=10.0,
+                allow_redirects=True,
             )
             
             cookies = dict(response.cookies)
@@ -76,14 +77,14 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
             
             return cookies
             
-    except httpx.RequestError as e:
+    except Exception as e:
         logger.error(
             "Acw_tc cookie request error: error_type={}, error={}",
             type(e).__name__,
             str(e),
         )
         return {}
-    except Exception as e:
+    except BaseException as e:
         logger.error(
             "Acw_tc cookie unexpected error: error_type={}, error={}",
             type(e).__name__,
@@ -133,11 +134,12 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
     auth_url = f"{settings.proxy_url}/api/v1/auths/"
     
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(
+        async with AsyncSession() as session:
+            response = await session.get(
                 auth_url,
                 headers=headers,
                 timeout=10.0,
+                allow_redirects=True,
             )
             
             if response.status_code == 200:
@@ -174,14 +176,14 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
                 )
                 raise Exception(f"认证失败 (HTTP {response.status_code}): {error_text[:100]}")
                 
-    except httpx.RequestError as e:
+    except Exception as e:
         logger.error(
             "Auth request error: error_type={}, error={}",
             type(e).__name__,
             str(e),
         )
         raise Exception(f"认证请求错误: {str(e)}")
-    except Exception as e:
+    except BaseException as e:
         logger.error(
             "Auth unexpected error: error_type={}, error={}",
             type(e).__name__,

@@ -88,11 +88,11 @@ def convert_messages(messages: list[Message]) -> ConvertedMessages:
                         tool_call_id = part.get("id")
                         tool_name = part.get("name")
                         tool_input = part.get("input", {}) or {}
-                        
+
                         # 存储工具调用映射
                         manager = get_mapping_manager()
                         manager.store(tool_call_id, tool_name, tool_input)
-                        
+
                         tool_calls.append(
                             {
                                 "id": tool_call_id,

@@ -10,6 +10,7 @@
 """
 
 import os
+import random
 from functools import lru_cache
 from typing import Literal
 
@@ -157,6 +158,19 @@ class AppConfig(BaseSettings):
         default=False,
         description="是否启用 Mihomo 切换"
     )
+    
+    # curl_cffi 浏览器模拟配置
+    browser_impersonate: str = Field(
+        default="random",
+        description="curl_cffi 浏览器模拟类型 (random/chrome136/chrome133a/chrome131/safari260/safari184/firefox133等)"
+    )
+    
+    # 支持的较新浏览器版本列表
+    _BROWSER_VERSIONS = [
+        "chrome136", "chrome133a", "chrome131", "chrome124", "chrome123",
+        "safari260", "safari260_ios", "safari184", "safari184_ios", "safari180", "safari180_ios",
+        "firefox133", "edge101"
+    ]
 
     @field_validator("verbose_logging", mode="before")
     @classmethod
@@ -193,25 +207,25 @@ class AppConfig(BaseSettings):
         else:
             return self.proxy_url
 
+    def get_browser_version(self) -> str:
+        """获取实际使用的浏览器版本。
+        
+        如果配置为random，则从支持的版本列表中随机选择。
+        """
+        if self.browser_impersonate == "random":
+            return random.choice(self._BROWSER_VERSIONS)
+        return self.browser_impersonate
+    
     @computed_field
     @property
     def HEADERS(self) -> dict[str, str]:
-        """HTTP请求头常量。"""
+        """HTTP请求头常量。
+        
+        只包含业务相关的headers，curl_cffi会自动处理浏览器相关的headers。
+        """
         return {
-            "Accept": "*/*",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
             "Content-Type": "application/json",
             "Origin": f"{self.protocol}//{self.base_url}",
-            "Pragma": "no-cache",
-            "Sec-Ch-Ua": '"Microsoft Edge";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
             "X-FE-Version": "prod-fe-1.0.106",
         }
 

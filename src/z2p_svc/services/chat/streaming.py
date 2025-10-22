@@ -9,21 +9,22 @@ import uuid
 from datetime import datetime, UTC
 from typing import Any, AsyncGenerator
 
-import httpx
+from curl_cffi.requests import AsyncSession
 
 # 尝试使用 orjson 加速 JSON 操作
 try:
     import orjson
-    
+
     def json_dumps(obj: dict) -> str:
         """使用 orjson 快速序列化"""
-        return orjson.dumps(obj).decode('utf-8')
-    
+        return orjson.dumps(obj).decode("utf-8")
+
     def json_loads(s: str) -> dict:
         """使用 orjson 快速反序列化"""
         return orjson.loads(s)
 except ImportError:
     import json
+
     json_dumps = json.dumps
     json_loads = json.loads
 
@@ -43,8 +44,8 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 # 预编译正则表达式（避免每次都编译，提升性能）
-SUMMARY_PATTERN = re.compile(r'</summary>\n')
-DETAILS_PATTERN = re.compile(r'</details>')
+SUMMARY_PATTERN = re.compile(r"</summary>\n")
+DETAILS_PATTERN = re.compile(r"</details>")
 GLM_BLOCK_START_PATTERN = re.compile(
     r'\n*<glm_block[^>]*>{"type": "mcp", "data": {"metadata": {'
 )
@@ -83,13 +84,15 @@ def create_chat_completion_chunk(
         "object": "chat.completion.chunk",
         "created": timestamp,
         "model": model,
-        "choices": [{
-            "index": 0,
-            "delta": delta,
-            "finish_reason": finish_reason if phase == "other" else None,
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason if phase == "other" else None,
+            }
+        ],
     }
-    
+
     if usage:
         chunk["usage"] = usage
 
@@ -145,45 +148,50 @@ async def process_streaming_response(
     .. note::
        响应格式遵循OpenAI的流式API规范。
     """
-    zai_data, params, headers = await prepare_request_data_func(
-        chat_request, access_token
-    )
+    async with AsyncSession(impersonate=settings.get_browser_version()) as session:  # type: ignore
+        # 从session获取curl_cffi自动设置的User-Agent
+        user_agent = session.headers.get("User-Agent", "")
 
-    request_id = params.get("requestId", "unknown")
-    user_id = params.get("user_id", "unknown")
-    timestamp = params.get("timestamp", "unknown")
-
-    logger.info(
-        "Streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
-        request_id,
-        user_id,
-        chat_request.model,
-        f"{settings.proxy_url}/api/chat/completions",
-    )
-
-    if settings.verbose_logging:
-        logger.debug(
-            "Streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
-            request_id,
-            f"{settings.proxy_url}/api/chat/completions",
-            {
-                k: v if k.lower() != "authorization" else v[:20] + "..."
-                for k, v in headers.items()
-            },  # 脱敏 Authorization
-            params,
-            zai_data,
+        # 准备请求数据，传入User-Agent
+        zai_data, params, headers = await prepare_request_data_func(
+            chat_request, access_token, user_agent=user_agent
         )
 
-    async with httpx.AsyncClient() as client:
+        request_id = params.get("requestId", "unknown")
+        user_id = params.get("user_id", "unknown")
+        timestamp = params.get("timestamp", "unknown")
+
+        logger.info(
+            "Streaming request initiated: request_id={}, user_id={}, model={}, upstream_url={}",
+            request_id,
+            user_id,
+            chat_request.model,
+            f"{settings.proxy_url}/api/chat/completions",
+        )
+
+        if settings.verbose_logging:
+            logger.debug(
+                "Streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
+                request_id,
+                f"{settings.proxy_url}/api/chat/completions",
+                {
+                    k: v if k.lower() != "authorization" else v[:20] + "..."
+                    for k, v in headers.items()
+                },  # 脱敏 Authorization
+                params,
+                zai_data,
+            )
+
         try:
-            async with client.stream(
-                "POST",
+            response = await session.post(
                 f"{settings.proxy_url}/api/chat/completions",
                 headers=headers,
                 params=params,
                 json=zai_data,
                 timeout=300,
-            ) as response:
+                stream=True,
+            )
+            try:
                 if response.status_code != 200:
                     await handle_upstream_error(
                         response,
@@ -207,19 +215,26 @@ async def process_streaming_response(
                 chunk_count = 0
 
                 async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
+                    if not line:
+                        continue
+
+                    # curl_cffi返回bytes，需要解码
+                    if isinstance(line, bytes):
+                        line = line.decode("utf-8")
+
+                    if not line.startswith("data:"):
                         continue
 
                     json_str = line[6:]
-                    
+
                     # 输出原始SSE数据块
                     if settings.verbose_logging:
                         logger.debug(
                             "Streaming SSE line: request_id={}, data={}",
                             request_id,
-                            json_str[:300]
+                            json_str[:300],
                         )
-                    
+
                     try:
                         json_object = json_loads(json_str)
                     except Exception:
@@ -240,7 +255,7 @@ async def process_streaming_response(
                                 "Streaming thinking chunk: request_id={}, chunks={}, content={}",
                                 request_id,
                                 chunk_count,
-                                content[:200]
+                                content[:200],
                             )
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'thinking', chunk_id))}\n\n"
 
@@ -257,7 +272,7 @@ async def process_streaming_response(
                                 "Streaming answer chunk: request_id={}, chunks={}, content={}",
                                 request_id,
                                 chunk_count,
-                                content[:200]
+                                content[:200],
                             )
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
 
@@ -274,7 +289,7 @@ async def process_streaming_response(
                                 "Streaming tool_call chunk: request_id={}, chunks={}, content={}",
                                 request_id,
                                 chunk_count,
-                                content[:200]
+                                content[:200],
                             )
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'tool_call', chunk_id))}\n\n"
 
@@ -292,7 +307,7 @@ async def process_streaming_response(
                             logger.debug(
                                 "Streaming other chunk: request_id={}, content={}",
                                 request_id,
-                                content[:200]
+                                content[:200],
                             )
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', chunk_id, usage, 'stop'))}\n\n"
 
@@ -306,39 +321,47 @@ async def process_streaming_response(
                         yield "data: [DONE]\n\n"
                         break
 
+            finally:
+                await response.aclose()
         except UpstreamAPIError:
             raise
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Unexpected HTTP status error: status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
-                e.response.status_code,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(
-                e.response.status_code,
-                f"HTTP错误 {e.response.status_code}",
-                "http_error",
-            ) from e
-        except httpx.RequestError as e:
-            logger.error(
-                "Upstream request error: error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(500, f"请求错误: {str(e)}", "request_error") from e
         except Exception as e:
-            logger.error(
-                "Unexpected error streaming: error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
-                type(e).__name__,
-                str(e),
-                request_id,
-                user_id,
-                timestamp,
-            )
-            raise UpstreamAPIError(500, f"未知错误: {str(e)}", "unknown_error") from e
+            if "status" in str(type(e).__name__).lower() or "HTTP" in str(e):
+                status_code = getattr(e, "status_code", 500)
+                logger.error(
+                    "Unexpected HTTP status error: status_code={}, error={}, request_id={}, user_id={}, timestamp={}",
+                    status_code,
+                    str(e),
+                    request_id,
+                    user_id,
+                    timestamp,
+                )
+                raise UpstreamAPIError(
+                    status_code,
+                    f"HTTP错误 {status_code}",
+                    "http_error",
+                ) from e
+            elif "request" in str(type(e).__name__).lower():
+                logger.error(
+                    "Upstream request error: error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
+                    type(e).__name__,
+                    str(e),
+                    request_id,
+                    user_id,
+                    timestamp,
+                )
+                raise UpstreamAPIError(
+                    500, f"请求错误: {str(e)}", "request_error"
+                ) from e
+            else:
+                logger.error(
+                    "Unexpected error streaming: error_type={}, error={}, request_id={}, user_id={}, timestamp={}",
+                    type(e).__name__,
+                    str(e),
+                    request_id,
+                    user_id,
+                    timestamp,
+                )
+                raise UpstreamAPIError(
+                    500, f"未知错误: {str(e)}", "unknown_error"
+                ) from e

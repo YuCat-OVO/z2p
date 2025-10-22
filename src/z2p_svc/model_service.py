@@ -4,7 +4,7 @@
 参考temp.py中的get_model_id和get_model_name函数实现。
 """
 
-import httpx
+from curl_cffi.requests import AsyncSession
 import stamina
 from typing import Any, Dict, List
 from datetime import datetime
@@ -141,11 +141,12 @@ async def fetch_models_from_upstream(access_token: str | None = None) -> dict[st
     logger.info("Fetching models from upstream: url={}", models_url)
     
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(
+        async with AsyncSession(impersonate=settings.get_browser_version()) as session:  # type: ignore
+            response = await session.get(
                 models_url,
                 headers=headers,
                 timeout=10.0,
+                allow_redirects=True,
             )
             
             if response.status_code == 200:
@@ -167,7 +168,7 @@ async def fetch_models_from_upstream(access_token: str | None = None) -> dict[st
                 )
                 raise Exception(f"获取模型列表失败 (HTTP {response.status_code}): {error_text[:100]}")
                 
-    except httpx.RequestError as e:
+    except Exception as e:
         logger.error(
             "Models request error: error_type={}, error={}, url={}",
             type(e).__name__,
@@ -175,7 +176,7 @@ async def fetch_models_from_upstream(access_token: str | None = None) -> dict[st
             models_url,
         )
         raise Exception(f"模型列表请求错误: {str(e)}")
-    except Exception as e:
+    except BaseException as e:
         logger.error(
             "Models unexpected error: error_type={}, error={}, url={}",
             type(e).__name__,

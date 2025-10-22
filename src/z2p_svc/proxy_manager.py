@@ -1,6 +1,6 @@
 """Mihomo代理管理模块。"""
 
-import httpx
+from curl_cffi.requests import AsyncSession
 from .config import get_settings
 from .logger import get_logger
 
@@ -21,9 +21,9 @@ async def switch_proxy_node() -> bool:
         if settings.mihomo_api_secret:
             headers["Authorization"] = f"Bearer {settings.mihomo_api_secret}"
         
-        async with httpx.AsyncClient() as client:
+        async with AsyncSession(impersonate=settings.get_browser_version()) as session:  # type: ignore
             # 获取当前代理组
-            resp = await client.get(
+            resp = await session.get(
                 f"{settings.mihomo_api_url}/proxies",
                 headers=headers,
                 timeout=5
@@ -64,7 +64,7 @@ async def switch_proxy_node() -> bool:
                 next_node = all_nodes[0]
             
             # 切换节点
-            switch_resp = await client.put(
+            switch_resp = await session.put(
                 f"{settings.mihomo_api_url}/proxies/{proxy_group}",
                 headers=headers,
                 json={"name": next_node},
