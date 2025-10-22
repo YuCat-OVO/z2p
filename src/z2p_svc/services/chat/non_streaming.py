@@ -3,7 +3,6 @@
 本模块负责处理与上游API的非流式交互，包括非流式响应解析和结果构建。
 """
 
-import json
 import uuid
 import re
 import codecs
@@ -11,6 +10,17 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+
+# 尝试使用 orjson 加速 JSON 操作
+try:
+    import orjson
+    
+    def json_loads(s: str) -> dict:
+        """使用 orjson 快速反序列化"""
+        return orjson.loads(s)
+except ImportError:
+    import json
+    json_loads = json.loads
 
 from ...config import get_settings
 from ...exceptions import UpstreamAPIError
@@ -26,6 +36,12 @@ from ...utils.error_handler import handle_upstream_error
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+# 预编译正则表达式
+QUERIES_PATTERN = re.compile(r'"queries":\s*\[(.*?)\]')
+QUERY_ITEMS_PATTERN = re.compile(r'"([^"]+)"')
+SUMMARY_SPLIT_PATTERN = re.compile(r'</summary>\n>')
+DETAILS_SPLIT_PATTERN = re.compile(r'</details>\n')
 
 
 async def process_non_streaming_response(
@@ -129,8 +145,8 @@ async def process_non_streaming_response(
                         break
 
                     try:
-                        json_object = json.loads(json_str)
-                    except json.JSONDecodeError:
+                        json_object = json_loads(json_str)
+                    except Exception:
                         logger.warning("Invalid JSON in non-stream: line={}", line[:100])
                         continue
 
@@ -152,7 +168,7 @@ async def process_non_streaming_response(
                                 usage_info
                             )
 
-                    # 处理tool_call阶段
+                    # 处理tool_call阶段（使用预编译正则）
                     if phase == "tool_call":
                         if edit_content and "<glm_block" in edit_content and "search" in edit_content:
                             try:
@@ -165,10 +181,10 @@ async def process_non_streaming_response(
                                     except:
                                         pass
                                 
-                                queries_match = re.search(r'"queries":\s*\[(.*?)\]', decoded)
+                                queries_match = QUERIES_PATTERN.search(decoded)
                                 if queries_match:
                                     queries_str = queries_match.group(1)
-                                    queries = re.findall(r'"([^"]+)"', queries_str)
+                                    queries = QUERY_ITEMS_PATTERN.findall(queries_str)
                                     if queries:
                                         search_info = "🔍 **搜索：** " + "　".join(queries[:5])
                                         reasoning_content += f"\n\n{search_info}\n\n"
@@ -176,12 +192,12 @@ async def process_non_streaming_response(
                                 pass
                         continue
 
-                    # 思考阶段
+                    # 思考阶段（使用预编译正则）
                     elif phase == "thinking":
                         if delta_content:
                             if delta_content.startswith("<details"):
                                 cleaned = (
-                                    delta_content.split("</summary>\n>")[-1].strip()
+                                    SUMMARY_SPLIT_PATTERN.split(delta_content)[-1].strip()
                                     if "</summary>\n>" in delta_content
                                     else delta_content
                                 )
@@ -196,10 +212,10 @@ async def process_non_streaming_response(
                                     cleaned[:200]
                                 )
                     
-                    # 答案阶段
+                    # 答案阶段（使用预编译正则）
                     elif phase == "answer":
                         if edit_content and "</details>\n" in edit_content:
-                            content_after = edit_content.split("</details>\n")[-1]
+                            content_after = DETAILS_SPLIT_PATTERN.split(edit_content)[-1]
                             if content_after:
                                 full_response += content_after
                                 if settings.verbose_logging:
