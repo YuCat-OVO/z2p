@@ -437,7 +437,7 @@ async def prepare_request_data(
         
         # 对于 glm-4.6v 模型，图片也放入 files 数组（而不是嵌入到 messages）
         if is_glm46v_model:
-            if image_video_files:
+            if uploaded_file_objects:
                 # glm-4.6v: 所有文件（包括图片）都放入 files 数组
                 zai_data.files = uploaded_file_objects
                 logger.info(
@@ -451,7 +451,7 @@ async def prepare_request_data(
         else:
             # 其他模型：标准处理逻辑
             # 处理最后一条用户消息
-            if uploaded_file_objects and zai_data.messages:
+            if image_video_files and zai_data.messages:
                 last_user_msg_idx = -1
                 for i in range(len(zai_data.messages) - 1, -1, -1):
                     if zai_data.messages[i].get("role") == "user":
