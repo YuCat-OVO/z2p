@@ -300,8 +300,16 @@ class TestNonStreamingResponse:
 
             mock_session = AsyncMock()
             mock_session.post = AsyncMock(return_value=mock_response)
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=None)
+            
+            # 正确配置异步上下文管理器
+            async def mock_aenter(self):
+                return mock_session
+            
+            async def mock_aexit(self, *args):
+                return None
+            
+            mock_session.__aenter__ = mock_aenter
+            mock_session.__aexit__ = mock_aexit
 
             mock_client_class.return_value = mock_session
 
@@ -321,7 +329,8 @@ class TestNonStreamingResponse:
             assert "model" in result, "应该包含model字段"
             assert result["choices"][0]["message"]["content"] == "Hello", "内容应该正确"
 
-    def test_non_streaming_endpoint_returns_json(self):
+    @pytest.mark.asyncio
+    async def test_non_streaming_endpoint_returns_json(self):
         """测试非流式端点返回JSON响应"""
         from fastapi.testclient import TestClient
         from src.z2p_svc.app import create_app
@@ -335,9 +344,9 @@ class TestNonStreamingResponse:
                 "data": [{"id": "glm-4.6", "object": "model"}]
             }
 
-            # Mock process_non_streaming_response
+            # Mock process_non_streaming_response as AsyncMock
             with patch(
-                "src.z2p_svc.routes.process_non_streaming_response"
+                "src.z2p_svc.routes.process_non_streaming_response", new_callable=AsyncMock
             ) as mock_process:
                 mock_process.return_value = {
                     "id": "chatcmpl-123",
@@ -430,8 +439,16 @@ class TestNonStreamingResponse:
 
             mock_session = AsyncMock()
             mock_session.post = AsyncMock(return_value=mock_response)
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=None)
+            
+            # 正确配置异步上下文管理器
+            async def mock_aenter(self):
+                return mock_session
+            
+            async def mock_aexit(self, *args):
+                return None
+            
+            mock_session.__aenter__ = mock_aenter
+            mock_session.__aexit__ = mock_aexit
 
             mock_client_class.return_value = mock_session
 

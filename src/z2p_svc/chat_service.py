@@ -234,8 +234,10 @@ async def prepare_request_data(
         # 提取主要语言代码（例如从 "en-US,en;q=0.9" 提取 "en-US"）
         user_language = chat_request.accept_language.split(',')[0].strip()
     
+    # 上游始终使用stream=True返回SSE流
+    # 非流式请求通过聚合SSE流来实现"伪非流式"
     zai_data = UpstreamRequestData(
-        stream=streaming,
+        stream=True,
         model=upstream_model_id,
         messages=converted.messages,
         signature_prompt=converted.last_user_message_text,

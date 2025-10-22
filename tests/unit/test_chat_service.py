@@ -121,7 +121,7 @@ class TestPrepareRequestData:
 
             # 验证结果
             assert zai_data["model"] == "GLM-4-6-API-V1"
-            assert zai_data["stream"] is False
+            assert zai_data["stream"] is True  # 伪非流式：始终为True
             assert len(zai_data["messages"]) > 0
             assert "requestId" in params
             assert "Authorization" in headers
@@ -253,11 +253,11 @@ class TestPrepareRequestData:
             )
             assert zai_data["stream"] is True
 
-            # 测试非流式
+            # 测试非流式（伪非流式：上游仍使用stream=True）
             zai_data, _, _ = await prepare_request_data(
                 chat_request, mock_access_token, streaming=False
             )
-            assert zai_data["stream"] is False
+            assert zai_data["stream"] is True  # 伪非流式：始终为True
 
     @pytest.mark.asyncio
     async def test_model_mapping_chain(self, mock_access_token):
