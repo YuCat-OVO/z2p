@@ -339,6 +339,78 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
                         source_id,
                         feature_key
                     )
+        
+        # 特殊处理：为 glm-4.6 手动添加 vision 变体（glm-4.6v）
+        if processed_id == "glm-4.6":
+            vision_variant_id = "glm-4.6v"
+            vision_variant_name = "GLM-4.6V"
+            
+            vision_variant_model = DownstreamModel(
+                id=vision_variant_id,
+                object="model",
+                name=vision_variant_name,
+                created=model_info.created_at or int(datetime.now().timestamp()),
+                owned_by="z.ai",
+            )
+            downstream_models.append(vision_variant_model)
+            
+            if vision_variant_id not in settings.REVERSE_MODELS_MAPPING:
+                settings.REVERSE_MODELS_MAPPING[vision_variant_id] = processed_id
+                logger.info(
+                    "Added reverse mapping for vision variant: {} -> {}",
+                    vision_variant_id,
+                    processed_id
+                )
+            logger.info(
+                "Generated manual vision variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, upstream_id={}",
+                processed_id,
+                processed_name,
+                vision_variant_id,
+                vision_variant_name,
+                source_id
+            )
+            
+            # 为 glm-4.6v 生成功能变体（基于 glm-4.6 的能力）
+            if model_meta and model_meta.capabilities:
+                for feature_key, feature_config in FEATURE_SWITCHES.items():
+                    # 跳过 vision 功能（glm-4.6v 本身就是 vision 变体）
+                    if feature_key == "vision":
+                        continue
+                    
+                    is_enabled = getattr(model_meta.capabilities, feature_key, False)
+                    
+                    should_generate_variant = (is_enabled and not feature_config.get("negate", False)) or \
+                                              (is_enabled and feature_config.get("negate", False))
+                    
+                    if should_generate_variant:
+                        glm46v_variant_id = f"{vision_variant_id}{feature_config['suffix']}"
+                        glm46v_variant_name = f"{vision_variant_name}{feature_config['name_suffix']}"
+                        
+                        glm46v_variant_model = DownstreamModel(
+                            id=glm46v_variant_id,
+                            object="model",
+                            name=glm46v_variant_name,
+                            created=model_info.created_at or int(datetime.now().timestamp()),
+                            owned_by="z.ai",
+                        )
+                        downstream_models.append(glm46v_variant_model)
+                        
+                        # glm-4.6v 的变体映射到 glm-4.6v，再映射到 glm-4.6
+                        if glm46v_variant_id not in settings.REVERSE_MODELS_MAPPING:
+                            settings.REVERSE_MODELS_MAPPING[glm46v_variant_id] = vision_variant_id
+                            logger.info(
+                                "Added reverse mapping for glm-4.6v variant: {} -> {}",
+                                glm46v_variant_id,
+                                vision_variant_id
+                            )
+                        logger.info(
+                            "Generated glm-4.6v variant: base_id={}, base_name={} -> variant_id={}, variant_name={}, feature={}",
+                            vision_variant_id,
+                            vision_variant_name,
+                            glm46v_variant_id,
+                            glm46v_variant_name,
+                            feature_key
+                        )
     
     result = DownstreamModelsResponse(
         object="list",

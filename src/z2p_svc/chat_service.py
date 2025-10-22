@@ -420,8 +420,11 @@ async def prepare_request_data(
             )
         
         # 根据文档逻辑：根据media类型区分处理
-        # 图片/视频：嵌入到messages.content数组
-        # 其他文件：放入顶层files数组
+        # 特殊处理：glm-4.6v 模型及其变体的图片放在 files 数组中（兼容上游行为）
+        # 其他模型：图片/视频嵌入到messages.content数组，其他文件放入顶层files数组
+        
+        # 检查是否是 glm-4.6v 模型或其变体（需要特殊处理）
+        is_glm46v_model = chat_request.model.lower().startswith("glm-4.6v")
         
         image_video_files = []
         other_files = []
@@ -432,55 +435,70 @@ async def prepare_request_data(
             else:
                 other_files.append(file_obj)
         
-        # 处理最后一条用户消息
-        if uploaded_file_objects and zai_data.messages:
-            last_user_msg_idx = -1
-            for i in range(len(zai_data.messages) - 1, -1, -1):
-                if zai_data.messages[i].get("role") == "user":
-                    last_user_msg_idx = i
-                    break
-            
-            if last_user_msg_idx >= 0:
-                last_msg = zai_data.messages[last_user_msg_idx]
-                text_content = last_msg.get("content", "")
+        # 对于 glm-4.6v 模型，图片也放入 files 数组（而不是嵌入到 messages）
+        if is_glm46v_model:
+            if image_video_files:
+                # glm-4.6v: 所有文件（包括图片）都放入 files 数组
+                zai_data.files = uploaded_file_objects
+                logger.info(
+                    "GLM-4.6V model: all files added to top-level files array: total_count={}, image_count={}, video_count={}, other_count={}, request_id={}",
+                    len(uploaded_file_objects),
+                    sum(1 for f in image_video_files if f["media"] == "image"),
+                    sum(1 for f in image_video_files if f["media"] == "video"),
+                    len(other_files),
+                    zai_data.id,
+                )
+        else:
+            # 其他模型：标准处理逻辑
+            # 处理最后一条用户消息
+            if uploaded_file_objects and zai_data.messages:
+                last_user_msg_idx = -1
+                for i in range(len(zai_data.messages) - 1, -1, -1):
+                    if zai_data.messages[i].get("role") == "user":
+                        last_user_msg_idx = i
+                        break
                 
-                # 如果有图片或视频，构建content数组
-                if image_video_files:
-                    content_array = [{"type": "text", "text": text_content}]
+                if last_user_msg_idx >= 0:
+                    last_msg = zai_data.messages[last_user_msg_idx]
+                    text_content = last_msg.get("content", "")
                     
-                    for file_obj in image_video_files:
-                        if file_obj["media"] == "image":
-                            content_array.append({
-                                "type": "image_url",
-                                "image_url": {"url": f"{file_obj['id']}_{file_obj['name']}"}
-                            })
-                        elif file_obj["media"] == "video":
-                            content_array.append({
-                                "type": "video_url",
-                                "video_url": {"url": f"{file_obj['id']}_{file_obj['name']}"}
-                            })
-                    
-                    zai_data.messages[last_user_msg_idx] = {
-                        "role": "user",
-                        "content": content_array
-                    }
-                    
-                    logger.info(
-                        "Message reconstructed with media files: text_length={}, image_count={}, video_count={}, request_id={}",
-                        len(text_content),
-                        sum(1 for f in image_video_files if f["media"] == "image"),
-                        sum(1 for f in image_video_files if f["media"] == "video"),
-                        zai_data.id,
-                    )
-        
-        # 只有非图片/视频文件才放入顶层files数组
-        if other_files:
-            zai_data.files = other_files
-            logger.info(
-                "Non-media files added to top-level files array: count={}, request_id={}",
-                len(other_files),
-                zai_data.id,
-            )
+                    # 如果有图片或视频，构建content数组
+                    if image_video_files:
+                        content_array = [{"type": "text", "text": text_content}]
+                        
+                        for file_obj in image_video_files:
+                            if file_obj["media"] == "image":
+                                content_array.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"{file_obj['id']}_{file_obj['name']}"}
+                                })
+                            elif file_obj["media"] == "video":
+                                content_array.append({
+                                    "type": "video_url",
+                                    "video_url": {"url": f"{file_obj['id']}_{file_obj['name']}"}
+                                })
+                        
+                        zai_data.messages[last_user_msg_idx] = {
+                            "role": "user",
+                            "content": content_array
+                        }
+                        
+                        logger.info(
+                            "Message reconstructed with media files: text_length={}, image_count={}, video_count={}, request_id={}",
+                            len(text_content),
+                            sum(1 for f in image_video_files if f["media"] == "image"),
+                            sum(1 for f in image_video_files if f["media"] == "video"),
+                            zai_data.id,
+                        )
+            
+            # 只有非图片/视频文件才放入顶层files数组
+            if other_files:
+                zai_data.files = other_files
+                logger.info(
+                    "Non-media files added to top-level files array: count={}, request_id={}",
+                    len(other_files),
+                    zai_data.id,
+                )
 
     # 获取模型特性配置，传入模型能力信息
     features_dict = get_model_features(chat_request.model, streaming, model_capabilities)

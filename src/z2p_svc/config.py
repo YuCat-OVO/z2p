@@ -220,6 +220,7 @@ class AppConfig(BaseSettings):
         """允许的模型列表。"""
         return [
             {"id": "glm-4.6", "name": "GLM-4.6"},
+            {"id": "glm-4.6v", "name": "GLM-4.6V"},
             {"id": "glm-4.5V", "name": "GLM-4.5V"},
             {"id": "glm-4.5", "name": "GLM-4.5"},
             {"id": "glm-4.6-search", "name": "GLM-4.6-SEARCH"},
