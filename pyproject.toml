@@ -44,3 +44,33 @@ source = ["z2p_svc", "tests"]
 show_missing = true
 skip_covered = true
 omit = ["src/**/asgi.py"]
+
+[tool.pytest.ini_options]
+# 修复 Windows 上 colorama 导致的 I/O 错误
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+]
+# 异步测试配置
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# 测试发现
+testpaths = ["tests"]
+pythonpath = ["src"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# 标记
+markers = [
+    "asyncio: mark test as async",
+    "unit: 单元测试",
+    "integration: 集成测试",
+    "system: 系统测试",
+    "e2e: 端到端测试",
+    "slow: 慢速测试",
+    "network: 需要网络连接的测试",
+]
+# Windows 特定配置：禁用颜色输出以避免 colorama 问题
+norecursedirs = [".git", ".tox", "dist", "build", "*.egg"]
