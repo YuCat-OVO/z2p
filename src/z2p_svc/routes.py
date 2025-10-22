@@ -190,6 +190,12 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
 
     access_token = auth_header.split(" ")[-1] if " " in auth_header else auth_header
     
+    # 提取客户端的 Accept-Language 头部并注入到请求对象
+    client_accept_language = request.headers.get("Accept-Language")
+    if client_accept_language:
+        chat_request.accept_language = client_accept_language
+        logger.debug("Client Accept-Language: {}", client_accept_language)
+    
     try:
         models_data = await get_models(access_token=access_token, use_cache=True)
         allowed_model_ids = [model["id"] for model in models_data.get("data", [])]

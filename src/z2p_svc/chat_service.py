@@ -229,6 +229,12 @@ async def prepare_request_data(
             chat_request.model
         )
     
+    # 从客户端请求中获取语言偏好，如果没有则使用默认值
+    user_language = "zh-CN"
+    if chat_request.accept_language:
+        # 提取主要语言代码（例如从 "en-US,en;q=0.9" 提取 "en-US"）
+        user_language = chat_request.accept_language.split(',')[0].strip()
+    
     zai_data = UpstreamRequestData(
         stream=streaming,
         model=upstream_model_id,
@@ -240,7 +246,7 @@ async def prepare_request_data(
             "{{CURRENT_TIME}}": datetime.now().strftime("%H:%M:%S"),
             "{{CURRENT_WEEKDAY}}": datetime.now().strftime("%A"),
             "{{CURRENT_TIMEZONE}}": "Asia/Shanghai",
-            "{{USER_LANGUAGE}}": "zh-CN",
+            "{{USER_LANGUAGE}}": user_language,
         },
         chat_id=chat_id,
         id=str(uuid.uuid4()),
@@ -514,6 +520,8 @@ async def prepare_request_data(
         token=auth_token,
         version=settings.HEADERS["X-FE-Version"],
         user_agent=settings.HEADERS["User-Agent"],
+        language=user_language,
+        languages=chat_request.accept_language or "zh-CN",
     )
 
     request_params = f"requestId,{params.requestId},timestamp,{params.timestamp},user_id,{params.user_id}"
@@ -525,7 +533,8 @@ async def prepare_request_data(
     headers = settings.HEADERS.copy()
     headers["Authorization"] = f"Bearer {auth_token}"
     headers["X-Signature"] = signature_data["signature"]
-    headers["Accept-Language"] = "zh-CN"
+    # 使用客户端提供的 Accept-Language，如果没有则使用默认值
+    headers["Accept-Language"] = chat_request.accept_language or "zh-CN,zh;q=0.9"
     headers["X-FE-Version"] = settings.HEADERS["X-FE-Version"] # 前端版本号
     headers["Referer"] = f"{settings.protocol}//{settings.base_url}/c/{chat_id}"
 

@@ -59,6 +59,10 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="采样温度")
     top_p: float = Field(default=0.9, ge=0.0, le=1.0, description="核采样参数")
     max_tokens: int = Field(default=8192, ge=1, description="最大token数")
+    accept_language: Optional[str] = Field(
+        default=None,
+        description="客户端的 Accept-Language 头部值，用于传递给上游 API"
+    )
 
 
 # --- Upstream Models (上游 API 模型) ---
