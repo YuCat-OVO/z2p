@@ -185,6 +185,15 @@ async def process_streaming_response(
                         continue
 
                     json_str = line[6:]
+                    
+                    # 输出原始SSE数据块
+                    if settings.verbose_logging:
+                        logger.debug(
+                            "Streaming SSE line: request_id={}, data={}",
+                            request_id,
+                            json_str[:300]
+                        )
+                    
                     try:
                         json_object = json.loads(json_str)
                     except json.JSONDecodeError:
@@ -199,11 +208,12 @@ async def process_streaming_response(
                         if "</summary>\n" in content:
                             content = content.split("</summary>\n")[-1]
                         chunk_count += 1
-                        if settings.verbose_logging and chunk_count % 10 == 0:
+                        if settings.verbose_logging:
                             logger.debug(
-                                "Streaming thinking progress: request_id={}, chunks={}",
+                                "Streaming thinking chunk: request_id={}, chunks={}, content={}",
                                 request_id,
                                 chunk_count,
+                                content[:200]
                             )
                         yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'thinking'))}\n\n"
 
@@ -214,11 +224,12 @@ async def process_streaming_response(
                         if "</details>" in content:
                             content = content.split("</details>")[-1]
                         chunk_count += 1
-                        if settings.verbose_logging and chunk_count % 10 == 0:
+                        if settings.verbose_logging:
                             logger.debug(
-                                "Streaming answer progress: request_id={}, chunks={}",
+                                "Streaming answer chunk: request_id={}, chunks={}, content={}",
                                 request_id,
                                 chunk_count,
+                                content[:200]
                             )
                         yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer'))}\n\n"
 
@@ -233,11 +244,12 @@ async def process_streaming_response(
                         )
                         content = re.sub(r'", "result": "".*</glm_block>', "", content)
                         chunk_count += 1
-                        if settings.verbose_logging and chunk_count % 10 == 0:
+                        if settings.verbose_logging:
                             logger.debug(
-                                "Streaming tool_call progress: request_id={}, chunks={}",
+                                "Streaming tool_call chunk: request_id={}, chunks={}, content={}",
                                 request_id,
                                 chunk_count,
+                                content[:200]
                             )
                         yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'tool_call'))}\n\n"
 
@@ -251,6 +263,12 @@ async def process_streaming_response(
                             chunk_count,
                             usage,
                         )
+                        if settings.verbose_logging and content:
+                            logger.debug(
+                                "Streaming other chunk: request_id={}, content={}",
+                                request_id,
+                                content[:200]
+                            )
                         yield f"data: {json.dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', usage, 'stop'))}\n\n"
 
                     elif phase == "done":

@@ -157,7 +157,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[d
 
 
 @router.post("/chat/completions", response_model=None)
-async def chat_completions(request: Request, chat_request: ChatRequest) -> Union[Response, StreamingResponse]:
+async def chat_completions(request: Request, chat_request: ChatRequest) -> Union[dict, Response, StreamingResponse]:
     """处理聊天补全请求（OpenAI 兼容）。
 
     支持流式和非流式两种响应模式，根据 ``chat_request.stream`` 参数决定。
@@ -274,11 +274,8 @@ async def chat_completions(request: Request, chat_request: ChatRequest) -> Union
         else:
             logger.debug("Processing non-streaming request")
             non_streaming_result = await process_non_streaming_response(chat_request, access_token)
-            return Response(
-                status_code=200,
-                content=json.dumps(non_streaming_result),
-                media_type="application/json",
-            )
+            # 直接返回字典，让 FastAPI 自动序列化为 JSON
+            return non_streaming_result
     except UpstreamAPIError as e:
         logger.error(
             "Upstream API error in route: status_code={}, error_message={}, error_type={}, model={}",

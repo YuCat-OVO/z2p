@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 from ...models import Message, ConvertedMessages
+from .tool_manager import get_mapping_manager, format_tool_result_for_ai
 
 
 def convert_messages(messages: list[Message]) -> ConvertedMessages:
@@ -84,14 +85,22 @@ def convert_messages(messages: list[Message]) -> ConvertedMessages:
 
                     tool_calls = new_message["tool_calls"]
                     if isinstance(tool_calls, list):
+                        tool_call_id = part.get("id")
+                        tool_name = part.get("name")
+                        tool_input = part.get("input", {}) or {}
+                        
+                        # 存储工具调用映射
+                        manager = get_mapping_manager()
+                        manager.store(tool_call_id, tool_name, tool_input)
+                        
                         tool_calls.append(
                             {
-                                "id": part.get("id"),
+                                "id": tool_call_id,
                                 "type": "function",
                                 "function": {
-                                    "name": part.get("name"),
+                                    "name": tool_name,
                                     "arguments": json.dumps(
-                                        part.get("input", {}) or {}, ensure_ascii=False
+                                        tool_input, ensure_ascii=False
                                     ),
                                 },
                             }
@@ -124,7 +133,7 @@ def convert_messages(messages: list[Message]) -> ConvertedMessages:
 
             if not dont_append and text_content:
                 trans_messages.append({"role": role, "content": text_content})
-            elif not dont_append and new_message.get("tool_calls"):
+            elif new_message.get("tool_calls"):
                 if text_content:
                     new_message["content"] = text_content
                 trans_messages.append(new_message)
