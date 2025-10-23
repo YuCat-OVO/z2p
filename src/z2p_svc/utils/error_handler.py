@@ -51,16 +51,23 @@ async def handle_upstream_error(
        检测到阿里云拦截时，如果启用了 Mihomo 代理切换
        (``ENABLE_MIHOMO_SWITCH=true``)，会自动切换代理节点
     """
-    if hasattr(response, "aread"):
-        error_content = await response.aread()
-        error_text = error_content.decode("utf-8", errors="ignore")
-    else:
-        error_text = (
-            response.text if hasattr(response, "text") else str(response.content)
-        )
+    # 读取响应体（处理流式响应）
+    error_text = ""
+    try:
+        # 对于 curl_cffi 的流式响应，需要先读取内容
+        if hasattr(response, "aread"):
+            error_content = await response.aread()
+            if error_content:
+                error_text = error_content.decode("utf-8", errors="ignore")
+        elif hasattr(response, "content") and response.content:
+            error_text = response.content.decode("utf-8", errors="ignore")
+        elif hasattr(response, "text"):
+            error_text = response.text or ""
+    except Exception:
+        pass
 
-    # 检测阿里云拦截
-    if response.status_code == 405 and is_aliyun_blocked_response(error_text):
+    # 检测阿里云拦截（405状态码且响应体为空时也视为阿里云拦截）
+    if response.status_code == 405 and (not error_text.strip() or is_aliyun_blocked_response(error_text)):
         log_prefix = "Aliyun blocked request detected (405 -> 429)"
         if not is_streaming:
             log_prefix += " (non-streaming)"

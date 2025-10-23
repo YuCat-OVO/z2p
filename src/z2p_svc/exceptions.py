@@ -117,9 +117,6 @@ def is_aliyun_blocked_response(response_text: str) -> bool:
     :param response_text: HTTP响应文本内容
     :return: 如果是阿里云拦截响应返回True，否则返回False
     """
-    if not response_text:
-        return False
-
     # 检查阿里云拦截响应的特征标识
     aliyun_indicators = [
         "data-spm",
