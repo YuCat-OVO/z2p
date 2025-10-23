@@ -6,7 +6,6 @@
 
 import asyncio
 import time
-import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator
 
@@ -23,6 +22,7 @@ from .signature_generator import generate_signature
 from .services.chat.converter import convert_messages
 from .services.chat.streaming import process_streaming_response as _process_streaming_response
 from .services.chat.non_streaming import process_non_streaming_response as _process_non_streaming_response
+from .utils.uuid_helper import generate_chat_id, generate_uuid_str, generate_request_id
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -196,10 +196,10 @@ async def prepare_request_data(
 
     # chat_id 应该在会话开始时生成一次，然后在整个会话中复用
     # 这里每次都生成新的ID是为了模拟新会话，实际应用中应该从请求中获取或维护会话状态
-    chat_id = str(uuid.uuid4())
+    chat_id = generate_chat_id()
 
     # user_id 应该从JWT token中提取，这里暂时生成随机ID
-    user_id = str(uuid.uuid4())
+    user_id = generate_uuid_str()
     auth_token = access_token
     cookies = {}
 
@@ -272,7 +272,7 @@ async def prepare_request_data(
             "{{USER_LANGUAGE}}": user_language,
         },
         chat_id=chat_id,
-        id=str(uuid.uuid4()),
+        id=generate_uuid_str(),
     )
 
     # 查找匹配的下游模型（用于 model_item）
@@ -593,7 +593,7 @@ async def prepare_request_data(
 
     # 使用 Pydantic 模型构造查询参数
     params = UpstreamRequestParams(
-        requestId=str(uuid.uuid4()),
+        requestId=generate_request_id(),
         timestamp=str(int(time.time() * 1000)),
         user_id=user_id,
         token=auth_token,

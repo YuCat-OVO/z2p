@@ -3,7 +3,6 @@
 本模块负责处理与上游API的非流式交互，包括非流式响应解析和结果构建。
 """
 
-import uuid
 from datetime import datetime
 from typing import Any
 
@@ -32,6 +31,7 @@ from ...models import (
     ChatCompletionUsage,
 )
 from ...utils.error_handler import handle_upstream_error
+from ...utils.uuid_helper import generate_completion_id
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -192,7 +192,7 @@ async def process_non_streaming_response(
             choice = ChatCompletionChoice(index=0, message=message, finish_reason="stop")
 
             response_obj = ChatCompletionResponse(
-                id=f"chatcmpl-{uuid.uuid4()}",
+                id=generate_completion_id(),
                 created=int(datetime.now().timestamp()),
                 model=chat_request.model,
                 choices=[choice],

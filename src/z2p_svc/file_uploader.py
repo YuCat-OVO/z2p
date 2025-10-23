@@ -12,7 +12,6 @@
 
 import base64
 import re # 导入 re 模块
-import uuid
 from typing import Any
 
 from curl_cffi.requests import AsyncSession
@@ -21,6 +20,7 @@ from .config import get_settings
 from .exceptions import FileUploadError
 from .logger import get_logger
 from .models import UploadedFileObject
+from .utils.uuid_helper import generate_uuid_str
 
 logger = get_logger(__name__)
 
@@ -108,7 +108,7 @@ class FileUploader:
         """
         self.settings = get_settings()
         self.access_token = access_token
-        self.chat_id = chat_id or str(uuid.uuid4())
+        self.chat_id = chat_id or generate_uuid_str()
         self.upload_url = f"{self.settings.proxy_url}/api/v1/files/"
         self.cookies = cookies or {}
         
@@ -217,7 +217,7 @@ class FileUploader:
         """
         if not filename:
             ext = file_type if file_type else 'png'
-            filename = f"{uuid.uuid4()}.{ext}"
+            filename = f"{generate_uuid_str()}.{ext}"
         elif "." not in filename:
             ext = file_type if file_type else 'png'
             filename = f"{filename}.{ext}"
@@ -359,7 +359,7 @@ class FileUploader:
 
                 filename = file_url.split("/")[-1]
                 if not filename or "." not in filename:
-                    filename = f"{uuid.uuid4()}.png"
+                    filename = f"{generate_uuid_str()}.png"
 
                 base64_data = base64.b64encode(response.content).decode("utf-8")
 

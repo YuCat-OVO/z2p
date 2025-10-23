@@ -5,7 +5,6 @@
 
 import re
 import time
-import uuid
 from datetime import datetime, UTC
 from typing import Any, AsyncGenerator
 
@@ -39,6 +38,7 @@ from ...models import (
     ChatCompletionChunkDelta,
 )
 from ...utils.error_handler import handle_upstream_error
+from ...utils.uuid_helper import generate_completion_id
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -114,7 +114,7 @@ def create_error_chunk(
     :return: SSE格式的错误响应
     """
     error_data = {
-        "id": f"chatcmpl-{uuid.uuid4()}",
+        "id": generate_completion_id(),
         "object": "chat.completion.chunk",
         "created": int(datetime.now(UTC).timestamp()),
         "model": model,
@@ -224,7 +224,7 @@ async def process_streaming_response(
 
                 # 预创建资源以提升性能
                 timestamp = int(datetime.now().timestamp())
-                chunk_id = f"chatcmpl-{uuid.uuid4()}"
+                chunk_id = generate_completion_id()
                 chunk_count = 0
 
                 async for line in response.aiter_lines():

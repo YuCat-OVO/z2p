@@ -6,7 +6,6 @@
 import base64
 import json
 import time
-import uuid
 from typing import AsyncGenerator, Union
 
 from fastapi import APIRouter, Request, Response, UploadFile, File
@@ -22,6 +21,7 @@ from .logger import get_logger
 from .models import ChatRequest, FileObject, ErrorResponse, ErrorDetail
 from .model_service import get_models
 from .file_uploader import FileUploader
+from .utils.uuid_helper import generate_chat_id
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -98,9 +98,8 @@ async def upload_file(request: Request, file: UploadFile = File(...)) -> Union[d
         )
 
     try:
-        chat_id_obj = uuid.uuid4()
-        chat_id = str(chat_id_obj)
-        file_uploader = FileUploader(access_token, chat_id_obj.hex)
+        chat_id = generate_chat_id()
+        file_uploader = FileUploader(access_token, chat_id.replace('-', ''))
         
         file_content = await file.read()
         base64_encoded_content = base64.b64encode(file_content).decode("utf-8")
