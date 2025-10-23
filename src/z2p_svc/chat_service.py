@@ -426,12 +426,12 @@ async def prepare_request_data(
                 zai_data.id,
             )
         
-        # 根据文档逻辑：根据media类型区分处理
-        # 特殊处理：glm-4.6v 模型及其变体的图片放在 files 数组中（兼容上游行为）
-        # 其他模型：图片/视频嵌入到messages.content数组，其他文件放入顶层files数组
+        # 根据media类型区分处理
+        # 默认情况：所有文件放入 files 数组
+        # 特殊情况：如果模型支持 vision 能力，图片/视频使用 image_url/video_url 嵌入到 messages.content
         
-        # 检查是否是 glm-4.6v 模型或其变体（需要特殊处理）
-        is_glm46v_model = chat_request.model.lower().startswith("glm-4.6v")
+        # 检查模型是否支持 vision 能力
+        has_vision = model_capabilities.get("vision", False) if model_capabilities else False
         
         image_video_files = []
         other_files = []
@@ -442,13 +442,12 @@ async def prepare_request_data(
             else:
                 other_files.append(file_obj)
         
-        # 对于 glm-4.6v 模型，图片也放入 files 数组（而不是嵌入到 messages）
-        if is_glm46v_model:
+        # 无 vision 能力：所有文件都放入 files 数组
+        if not has_vision:
             if uploaded_file_objects:
-                # glm-4.6v: 所有文件（包括图片）都放入 files 数组
                 zai_data.files = uploaded_file_objects
                 logger.info(
-                    "GLM-4.6V model: all files added to top-level files array: total_count={}, image_count={}, video_count={}, other_count={}, request_id={}",
+                    "Non-vision model: all files added to top-level files array: total_count={}, image_count={}, video_count={}, other_count={}, request_id={}",
                     len(uploaded_file_objects),
                     sum(1 for f in image_video_files if f["media"] == "image"),
                     sum(1 for f in image_video_files if f["media"] == "video"),
@@ -456,7 +455,7 @@ async def prepare_request_data(
                     zai_data.id,
                 )
         else:
-            # 其他模型：标准处理逻辑
+            # 有 vision 能力：图片/视频嵌入到 messages.content，其他文件放入 files 数组
             # 处理最后一条用户消息
             if image_video_files and zai_data.messages:
                 last_user_msg_idx = -1
