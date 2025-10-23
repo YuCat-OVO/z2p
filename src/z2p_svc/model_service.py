@@ -36,11 +36,6 @@ FEATURE_SWITCHES: Dict[str, Dict[str, Any]] = {
         "name_suffix": "-SEARCH",
         "description_suffix": "(启用网络搜索)"
     },
-    "mcp": {
-        "suffix": "-mcp",
-        "name_suffix": "-MCP",
-        "description_suffix": "(启用MCP工具)"
-    },
     "vision": {
         "suffix": "-vision",
         "name_suffix": "-VISION",
@@ -191,10 +186,9 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     
     自动为支持特殊功能的模型生成变体：
     
-    - 基础模型：原始模型 ID
+    - 基础模型：原始模型 ID（默认包含上游 MCP 工具）
     - ``-nothinking`` 变体：禁用深度思考
-    - ``-search`` 变体：启用网络搜索
-    - ``-mcp`` 变体：启用 MCP 工具
+    - ``-search`` 变体：启用网络搜索（额外添加搜索 MCP）
     - ``-vision`` 变体：启用视觉能力
     - ``-fileqa`` 变体：启用文件问答
     
@@ -218,6 +212,7 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
        - 仅为激活的模型生成变体
        - 避免重复变体（如 ``glm-4.5v`` 已包含 vision）
        - 自动更新反向映射表
+       - MCP 工具默认从上游模型能力中获取，无需单独变体
     """
     global _models_cache
     

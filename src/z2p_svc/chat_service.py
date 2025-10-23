@@ -30,7 +30,7 @@ settings = get_settings()
 
 
 
-def get_model_features(model: str, streaming: bool, model_capabilities: dict[str, Any] | None = None) -> dict[str, Any]:
+def get_model_features(model: str, streaming: bool, model_meta: dict[str, Any] | None = None) -> dict[str, Any]:
     """获取模型特性配置。
     
     根据模型 ID 自动识别并配置功能开关。支持通过模型名称后缀
@@ -38,10 +38,10 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
     
     :param model: 模型名称（客户端请求的模型 ID，可能包含功能后缀）
     :param streaming: 是否为流式请求
-    :param model_capabilities: 上游模型的能力配置（从模型列表获取）
+    :param model_meta: 上游模型的meta信息（包含capabilities和mcpServerIds）
     :type model: str
     :type streaming: bool
-    :type model_capabilities: dict[str, Any] | None
+    :type model_meta: dict[str, Any] | None
     :return: 包含特性配置和 MCP 服务器列表的字典
     :rtype: dict[str, Any]
     
@@ -62,11 +62,13 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
     **支持的模型后缀:**
     
     - ``-nothinking``: 禁用深度思考功能
-    - ``-search``: 启用网络搜索
-    - ``-advanced-search``: 启用高级搜索（包含 MCP 服务器）
+    - ``-search``: 启用网络搜索（添加 deep-web-search MCP）
+    - ``-advanced-search``: 启用高级搜索（添加 advanced-search MCP）
     
     .. note::
-       非流式请求会自动禁用 thinking 功能
+       - 非流式请求会自动禁用 thinking 功能
+       - 所有模型默认合并上游 MCP 服务器列表（从 meta.mcpServerIds 获取）
+       - web_search 仅在 search 相关后缀时启用
     """
     # 使用 Pydantic 模型构建特性配置
     features = ModelFeatures()
@@ -90,8 +92,8 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
             logger.debug("Thinking disabled for non-streaming request: model={}", model)
     else:
         # 检查上游模型是否支持 thinking 能力
-        if model_capabilities:
-            supports_thinking = model_capabilities.get("capabilities", {}).get("think", False)
+        if model_meta:
+            supports_thinking = model_meta.get("capabilities", {}).get("think", False)
             if not supports_thinking:
                 features.enable_thinking = False
                 if settings.verbose_logging:
@@ -106,9 +108,23 @@ def get_model_features(model: str, streaming: bool, model_capabilities: dict[str
             logger.debug("Model feature detected: search suffix enabled for model={}", model)
         
         if has_advanced_search_suffix:
-            mcp_servers = ["advanced-search"]
+            mcp_servers.append("advanced-search")
             if settings.verbose_logging:
                 logger.debug("Model feature detected: advanced-search suffix enabled MCP server for model={}", model)
+        else:
+            mcp_servers.append("deep-web-search")
+            if settings.verbose_logging:
+                logger.debug("Model feature detected: search suffix enabled MCP server for model={}", model)
+    
+    # 合并上游 MCP 列表（所有模型默认使用）
+    if model_meta:
+        upstream_mcp_servers = model_meta.get("mcpServerIds", [])
+        if upstream_mcp_servers:
+            for server in upstream_mcp_servers:
+                if server not in mcp_servers:
+                    mcp_servers.append(server)
+            if settings.verbose_logging:
+                logger.debug("Merged upstream MCP servers: model={}, mcp_servers={}", model, mcp_servers)
 
     return {"features": features.model_dump(), "mcp_servers": mcp_servers}
 
@@ -160,11 +176,16 @@ async def prepare_request_data(
     )
     
     # 预加载模型映射表以支持动态模型ID转换
-    from .model_service import get_models
-    models = []  # 初始化 models 变量
+    from .model_service import get_models, fetch_models_from_upstream
+    models = []  # 初始化 models 变量（下游模型列表）
+    upstream_models = []  # 上游模型列表（包含完整的 meta 信息）
     try:
         models_data = await get_models(access_token=access_token, use_cache=True)
         models = models_data.get("data", [])
+        
+        # 直接从上游获取完整的模型信息（包含 meta）
+        upstream_data = await fetch_models_from_upstream(access_token)
+        upstream_models = upstream_data.get("data", [])
     except Exception as e:
         logger.warning(
             "Failed to fetch models for mapping initialization: error={}. Will use existing mappings.",
@@ -242,7 +263,8 @@ async def prepare_request_data(
         messages=converted.messages,
         signature_prompt=converted.last_user_message_text,
         variables={
-            "{{CURRENT_DATETIME}}": datetime.now().isoformat(),
+            "{{USER_LOCATION}}": "Unknown",  # 添加用户位置变量（默认值）
+            "{{CURRENT_DATETIME}}": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # 匹配上游格式
             "{{CURRENT_DATE}}": datetime.now().strftime("%Y-%m-%d"),
             "{{CURRENT_TIME}}": datetime.now().strftime("%H:%M:%S"),
             "{{CURRENT_WEEKDAY}}": datetime.now().strftime("%A"),
@@ -253,15 +275,12 @@ async def prepare_request_data(
         id=str(uuid.uuid4()),
     )
 
-    # 查找匹配的模型并提取完整的模型信息
+    # 查找匹配的下游模型（用于 model_item）
     model_found = False
-    model_capabilities = None
     for model in models:
         if model["id"] == chat_request.model:
-            # 使用完整的模型对象，包含所有字段
+            # 使用下游模型对象（OpenAI 兼容格式，不包含冗余的 info）
             zai_data.model_item = model
-            # 提取模型能力配置用于特性判断
-            model_capabilities = model.get("info", {}).get("meta", {}).get("capabilities", {})
             model_found = True
             break
     
@@ -271,27 +290,57 @@ async def prepare_request_data(
             "id": upstream_model_id,
             "name": upstream_model_id,
             "owned_by": "openai",
-            "info": {
-                "id": upstream_model_id,
-                "name": upstream_model_id,
-                "meta": {
-                    "capabilities": {}
-                }
-            }
         }
         logger.warning(
             "Model not found in models list, using upstream_model_id: model={}, upstream_model={}",
             chat_request.model,
             upstream_model_id
         )
+    
+    # 从上游模型列表中查找对应的模型，提取完整的上游模型对象
+    model_capabilities = None
+    model_meta = None
+    upstream_model_obj = None
+    for upstream_model in upstream_models:
+        # 匹配上游模型ID（通过反向映射链）
+        if upstream_model.get("id") == upstream_model_id or upstream_model.get("info", {}).get("id") == upstream_model_id:
+            upstream_model_obj = upstream_model  # 保存完整的上游模型对象
+            model_meta = upstream_model.get("info", {}).get("meta", {})
+            model_capabilities = model_meta.get("capabilities", {})
+            if settings.verbose_logging:
+                logger.debug(
+                    "Found upstream model: model={}, upstream_id={}, capabilities={}, mcp_servers={}",
+                    chat_request.model,
+                    upstream_model_id,
+                    list(model_capabilities.keys()) if model_capabilities else [],
+                    model_meta.get("mcpServerIds", [])
+                )
+            break
+    
+    if not model_meta:
+        logger.warning(
+            "Upstream model not found: model={}, upstream_model={}. Using empty capabilities.",
+            chat_request.model,
+            upstream_model_id
+        )
+        model_meta = {}
+        model_capabilities = {}
+    
+    # 使用完整的上游模型对象作为 model_item（匹配上游格式）
+    if upstream_model_obj:
+        zai_data.model_item = upstream_model_obj
+    # 如果没有找到上游模型，保持之前设置的简化 model_item
 
-    # 添加生成参数 (仅传递 ChatRequest 中存在的参数)
+    # 添加生成参数 (仅在客户端明确提供时添加，否则保持空对象)
+    # 参考上游格式：params 默认为空对象 {}
+    params_dict = {}
     if chat_request.temperature is not None:
-        zai_data.params["temperature"] = chat_request.temperature
+        params_dict["temperature"] = chat_request.temperature
     if chat_request.top_p is not None:
-        zai_data.params["top_p"] = chat_request.top_p
+        params_dict["top_p"] = chat_request.top_p
     if chat_request.max_tokens is not None:
-        zai_data.params["max_tokens"] = chat_request.max_tokens
+        params_dict["max_tokens"] = chat_request.max_tokens
+    zai_data.params = params_dict
 
     signature_content = converted.last_user_message_text
 
@@ -506,11 +555,41 @@ async def prepare_request_data(
                     zai_data.id,
                 )
 
-    # 获取模型特性配置，传入模型能力信息
-    features_dict = get_model_features(chat_request.model, streaming, model_capabilities)
-    zai_data.features = features_dict["features"]
-    if features_dict["mcp_servers"]:
-        zai_data.mcp_servers = features_dict["mcp_servers"]
+    # 获取模型特性配置，传入完整的meta信息（包含capabilities和mcpServerIds）
+    features_dict = get_model_features(chat_request.model, streaming, model_meta)
+    
+    # 构建 features 对象（匹配上游格式）
+    features_obj = features_dict["features"].copy()
+    features_obj["image_generation"] = False  # 添加 image_generation 字段
+    
+    # 将 MCP 服务器转换为 features.features 数组格式
+    mcp_servers_list = features_dict.get("mcp_servers", [])
+    features_array = []
+    for server_id in mcp_servers_list:
+        features_array.append({
+            "type": "mcp",
+            "server": server_id,
+            "status": "hidden"  # 默认状态为 hidden
+        })
+    
+    # 如果有 web_search，添加 web_search 类型的 feature
+    if features_obj.get("web_search"):
+        features_array.append({
+            "type": "web_search",
+            "server": "web_search",
+            "status": "hidden"
+        })
+    
+    # 添加 tool_selector（如果有 MCP 服务器）
+    if mcp_servers_list:
+        features_array.append({
+            "type": "tool_selector",
+            "server": "tool_selector",
+            "status": "hidden"
+        })
+    
+    features_obj["features"] = features_array
+    zai_data.features = features_obj
 
     # 使用 Pydantic 模型构造查询参数
     params = UpstreamRequestParams(
@@ -539,15 +618,20 @@ async def prepare_request_data(
     headers["Referer"] = f"{settings.protocol}//{settings.base_url}/c/{chat_id}"
 
     files_processed = bool(converted.file_urls)
+    
+    # 为日志创建数据副本，移除 model_item 以避免污染日志
+    zai_data_dict = zai_data.model_dump()
+    log_data = {k: v for k, v in zai_data_dict.items() if k != "model_item"}
+    
     logger.info(
-        "Request data prepared successfully: chat_id={}, request_id={}, model={}, upstream_model={}, streaming={}, files_processed={}, features={}",
+        "Request data prepared successfully: chat_id={}, request_id={}, model={}, upstream_model={}, streaming={}, files_processed={}, data={}",
         zai_data.chat_id,
         params.requestId,
         chat_request.model,
         zai_data.model,
         streaming,
         files_processed,
-        zai_data.features,
+        log_data,
     )
 
     return zai_data.model_dump(), params.model_dump(), headers

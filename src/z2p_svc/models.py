@@ -520,17 +520,12 @@ class UpstreamRequestData(BaseModel):
     signature_prompt: str = Field(default="", description="用于签名的提示词内容")
     params: Dict[str, Any] = Field(default_factory=dict, description="生成参数（temperature, top_p, max_tokens）")
     files: List[Dict[str, Any]] = Field(default_factory=list, description="非媒体文件列表")
-    mcp_servers: List[str] = Field(default_factory=list, description="MCP 服务器列表")
-    features: Dict[str, Any] = Field(default_factory=dict, description="功能特性配置")
+    features: Dict[str, Any] = Field(default_factory=dict, description="功能特性配置（包含 features 数组）")
     variables: Dict[str, str] = Field(default_factory=dict, description="模板变量（日期时间等）")
     model_item: Optional[Dict[str, Any]] = Field(default=None, description="完整的模型对象")
     background_tasks: Dict[str, bool] = Field(
         default_factory=lambda: {"title_generation": True, "tags_generation": True},
         description="后台任务配置"
-    )
-    stream_options: Dict[str, bool] = Field(
-        default_factory=lambda: {"include_usage": True},
-        description="流式响应选项"
     )
     chat_id: str = Field(..., description="会话 ID（UUID）")
     id: str = Field(..., description="请求 ID（UUID）")

@@ -301,11 +301,10 @@ class TestGetModels:
 
             result = await get_models(mock_access_token, use_cache=False)
 
-            # 应该生成 nothinking、search、mcp 变体
+            # 应该生成 nothinking、search 变体（不再生成 mcp 变体）
             model_ids = [m["id"] for m in result["data"]]
             assert "glm-4.6-nothinking" in model_ids
             assert "glm-4.6-search" in model_ids
-            assert "glm-4.6-mcp" in model_ids
 
     @pytest.mark.asyncio
     async def test_cache_mechanism(self, mock_access_token):
@@ -707,10 +706,9 @@ class TestGLM46VisionVariant:
 
             model_ids = [m["id"] for m in result["data"]]
 
-            # 验证 glm-4.6v 的功能变体存在
+            # 验证 glm-4.6v 的功能变体存在（不再生成 mcp 变体）
             assert "glm-4.6v-nothinking" in model_ids
             assert "glm-4.6v-search" in model_ids
-            assert "glm-4.6v-mcp" in model_ids
             assert "glm-4.6v-fileqa" in model_ids
 
             # 验证不会生成 glm-4.6v-vision（因为已经是 vision 变体）
@@ -786,9 +784,10 @@ class TestFeatureSwitches:
         """测试功能开关配置结构。"""
         assert "think" in FEATURE_SWITCHES
         assert "web_search" in FEATURE_SWITCHES
-        assert "mcp" in FEATURE_SWITCHES
         assert "vision" in FEATURE_SWITCHES
         assert "file_qa" in FEATURE_SWITCHES
+        # mcp 已被移除，不再生成 mcp 变体
+        assert "mcp" not in FEATURE_SWITCHES
         
         for feature, config in FEATURE_SWITCHES.items():
             assert "suffix" in config

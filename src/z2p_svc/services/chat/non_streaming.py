@@ -52,13 +52,24 @@ async def process_non_streaming_response(
        响应格式遵循OpenAI的非流式API规范。
     """
     async with AsyncSession(impersonate=settings.get_browser_version()) as session:  # type: ignore
-        # 从session获取curl_cffi自动设置的User-Agent
-        user_agent = session.headers.get("User-Agent", "")
-
-        # 准备请求数据，传入User-Agent（非流式请求）
+        # 准备请求数据，先不传入 user_agent（使用空字符串占位）
         zai_data, params, headers = await prepare_request_data_func(
-            chat_request, access_token, streaming=False, user_agent=user_agent
+            chat_request, access_token, streaming=False, user_agent=""
         )
+        
+        # 从 curl_cffi session 获取实际的 User-Agent
+        # impersonate 参数会自动设置对应浏览器的 User-Agent
+        # 使用 type: ignore 来忽略 Pylance 的类型检查警告
+        actual_user_agent = ""
+        try:
+            if hasattr(session, 'headers') and 'User-Agent' in session.headers:
+                actual_user_agent = session.headers['User-Agent']  # type: ignore
+        except Exception:
+            pass
+        
+        # 更新 params 中的 user_agent
+        if actual_user_agent:
+            params["user_agent"] = actual_user_agent
 
         full_response = ""
         usage_info = None
@@ -75,6 +86,8 @@ async def process_non_streaming_response(
         )
 
         if settings.verbose_logging:
+            # 为日志创建数据副本，移除 model_item 以避免污染日志
+            log_data = {k: v for k, v in zai_data.items() if k != "model_item"}
             logger.debug(
                 "Non-streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
                 request_id,
@@ -84,7 +97,7 @@ async def process_non_streaming_response(
                     for k, v in headers.items()
                 },
                 params,
-                zai_data,
+                log_data,
             )
 
         try:

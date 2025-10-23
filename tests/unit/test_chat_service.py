@@ -53,15 +53,57 @@ class TestGetModelFeatures:
         assert result["features"]["web_search"] is True
         assert "advanced-search" in result["mcp_servers"]
 
-    def test_model_capabilities_override_thinking(self):
-        """测试模型能力配置覆盖 thinking 设置。"""
+    def test_model_meta_override_thinking(self):
+        """测试模型meta配置覆盖 thinking 设置。"""
         # 模型不支持 thinking
-        capabilities = {"capabilities": {"think": False}}
+        model_meta = {"capabilities": {"think": False}}
         result = get_model_features(
-            "glm-4.6", streaming=True, model_capabilities=capabilities
+            "glm-4.6", streaming=True, model_meta=model_meta
         )
 
         assert result["features"]["enable_thinking"] is False
+
+    def test_upstream_mcp_servers_merged(self):
+        """测试上游MCP服务器列表被正确合并。"""
+        model_meta = {
+            "capabilities": {"think": True},
+            "mcpServerIds": ["upstream-mcp-1", "upstream-mcp-2"]
+        }
+        result = get_model_features(
+            "glm-4.6", streaming=True, model_meta=model_meta
+        )
+
+        assert "upstream-mcp-1" in result["mcp_servers"]
+        assert "upstream-mcp-2" in result["mcp_servers"]
+
+    def test_upstream_mcp_with_search_suffix(self):
+        """测试search后缀与上游MCP合并。"""
+        model_meta = {
+            "capabilities": {"think": True},
+            "mcpServerIds": ["upstream-mcp-1"]
+        }
+        result = get_model_features(
+            "glm-4.6-search", streaming=True, model_meta=model_meta
+        )
+
+        # 应该包含上游MCP和search添加的MCP
+        assert "upstream-mcp-1" in result["mcp_servers"]
+        assert "deep-web-search" in result["mcp_servers"]
+        assert result["features"]["web_search"] is True
+
+    def test_no_duplicate_mcp_servers(self):
+        """测试MCP服务器列表不重复。"""
+        model_meta = {
+            "capabilities": {"think": True},
+            "mcpServerIds": ["deep-web-search", "upstream-mcp-1"]
+        }
+        result = get_model_features(
+            "glm-4.6-search", streaming=True, model_meta=model_meta
+        )
+
+        # deep-web-search不应该重复
+        mcp_count = result["mcp_servers"].count("deep-web-search")
+        assert mcp_count == 1
 
     def test_case_insensitive_suffix_detection(self):
         """测试后缀检测不区分大小写。"""
@@ -325,19 +367,21 @@ class TestModelFeaturesEdgeCases:
         # search 应该启用搜索
         assert result["features"]["web_search"] is True
 
-    def test_model_capabilities_none(self):
-        """测试模型能力为 None。"""
-        result = get_model_features("glm-4.6", streaming=True, model_capabilities=None)
+    def test_model_meta_none(self):
+        """测试模型meta为 None。"""
+        result = get_model_features("glm-4.6", streaming=True, model_meta=None)
 
         # 应该使用默认行为
         assert result["features"]["enable_thinking"] is True
+        assert result["mcp_servers"] == []
 
-    def test_model_capabilities_empty_dict(self):
-        """测试模型能力为空字典。"""
-        result = get_model_features("glm-4.6", streaming=True, model_capabilities={})
+    def test_model_meta_empty_dict(self):
+        """测试模型meta为空字典。"""
+        result = get_model_features("glm-4.6", streaming=True, model_meta={})
 
         # 应该使用默认行为
         assert result["features"]["enable_thinking"] is True
+        assert result["mcp_servers"] == []
 
 
 @pytest.mark.unit
@@ -709,6 +753,7 @@ class TestGLM46VFileHandling:
 
         with (
             patch("src.z2p_svc.model_service.get_models") as mock_get_models,
+            patch("src.z2p_svc.model_service.fetch_models_from_upstream") as mock_fetch_upstream,
             patch("src.z2p_svc.chat_service.convert_messages") as mock_convert,
             patch(
                 "src.z2p_svc.signature_generator.generate_signature"
@@ -719,7 +764,27 @@ class TestGLM46VFileHandling:
                 "data": [
                     {
                         "id": "glm-4.5v",
-                        "info": {"id": "glm-4.5v", "meta": {"capabilities": {}}},
+                        "info": {
+                            "id": "glm-4.5v",
+                            "meta": {
+                                "capabilities": {"vision": True}
+                            }
+                        },
+                    }
+                ]
+            }
+            
+            # Mock上游模型数据（包含完整的meta信息）
+            mock_fetch_upstream.return_value = {
+                "data": [
+                    {
+                        "id": "glm-4.5v",
+                        "info": {
+                            "id": "glm-4.5v",
+                            "meta": {
+                                "capabilities": {"vision": True}
+                            }
+                        },
                     }
                 ]
             }
@@ -759,3 +824,130 @@ class TestGLM46VFileHandling:
             
             # files 数组应该为空或不存在
             assert "files" not in zai_data or len(zai_data.get("files", [])) == 0
+
+    @pytest.mark.asyncio
+    async def test_user_agent_passed_to_params(self, mock_access_token):
+        """测试user_agent正确传递到params。"""
+        chat_request = ChatRequest(
+            **ChatRequestBuilder()
+            .with_model("glm-4.6")
+            .with_message("user", "测试")
+            .build()
+        )
+
+        with (
+            patch("src.z2p_svc.model_service.get_models") as mock_get_models,
+            patch(
+                "src.z2p_svc.services.chat.converter.convert_messages"
+            ) as mock_convert,
+            patch(
+                "src.z2p_svc.signature_generator.generate_signature"
+            ) as mock_signature,
+        ):
+            mock_get_models.return_value = {
+                "data": [
+                    {
+                        "id": "glm-4.6",
+                        "info": {"id": "GLM-4-6-API-V1", "meta": {"capabilities": {}}},
+                    }
+                ]
+            }
+
+            class MockConvertResult:
+                messages = [{"role": "user", "content": "测试"}]
+                last_user_message_text = "测试"
+                file_urls = []
+
+            mock_convert.return_value = MockConvertResult()
+            mock_signature.return_value = {
+                "signature": "test_sig",
+                "timestamp": "123456",
+            }
+
+            # 测试传入user_agent
+            test_user_agent = "Mozilla/5.0 Test Browser"
+            zai_data, params, headers = await prepare_request_data(
+                chat_request, mock_access_token, user_agent=test_user_agent
+            )
+
+            # 验证user_agent在params中
+            assert params["user_agent"] == test_user_agent
+
+    @pytest.mark.asyncio
+    async def test_upstream_mcp_merged_in_request(self, mock_access_token):
+        """测试上游MCP列表在请求中被正确合并。"""
+        chat_request = ChatRequest(
+            **ChatRequestBuilder()
+            .with_model("glm-4.6")
+            .with_message("user", "测试")
+            .build()
+        )
+
+        with (
+            patch("src.z2p_svc.model_service.get_models") as mock_get_models,
+            patch("src.z2p_svc.model_service.fetch_models_from_upstream") as mock_fetch_upstream,
+            patch(
+                "src.z2p_svc.services.chat.converter.convert_messages"
+            ) as mock_convert,
+            patch(
+                "src.z2p_svc.signature_generator.generate_signature"
+            ) as mock_signature,
+        ):
+            mock_get_models.return_value = {
+                "data": [
+                    {
+                        "id": "glm-4.6",
+                        "info": {
+                            "id": "GLM-4-6-API-V1",
+                            "meta": {
+                                "capabilities": {"think": True},
+                                "mcpServerIds": ["upstream-mcp-1", "upstream-mcp-2"]
+                            }
+                        },
+                    }
+                ]
+            }
+            
+            # Mock上游模型数据（包含完整的meta信息）
+            mock_fetch_upstream.return_value = {
+                "data": [
+                    {
+                        "id": "GLM-4-6-API-V1",
+                        "info": {
+                            "id": "GLM-4-6-API-V1",
+                            "meta": {
+                                "capabilities": {"think": True},
+                                "mcpServerIds": ["upstream-mcp-1", "upstream-mcp-2"]
+                            }
+                        },
+                    }
+                ]
+            }
+
+            class MockConvertResult:
+                messages = [{"role": "user", "content": "测试"}]
+                last_user_message_text = "测试"
+                file_urls = []
+
+            mock_convert.return_value = MockConvertResult()
+            mock_signature.return_value = {
+                "signature": "test_sig",
+                "timestamp": "123456",
+            }
+
+            zai_data, params, headers = await prepare_request_data(
+                chat_request, mock_access_token
+            )
+
+            # 验证MCP服务器列表包含上游MCP（现在在 features.features 数组中）
+            assert "features" in zai_data
+            assert "features" in zai_data["features"]
+            
+            # 提取 MCP 服务器列表
+            mcp_servers = [
+                f["server"] for f in zai_data["features"]["features"]
+                if f["type"] == "mcp"
+            ]
+            
+            assert "upstream-mcp-1" in mcp_servers
+            assert "upstream-mcp-2" in mcp_servers
