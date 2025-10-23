@@ -39,6 +39,8 @@ SHELL ["sh", "-exc"]
 
 WORKDIR /app
 
+RUN apk add --no-cache libcurl libffi
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     APP_ENV=production \
