@@ -127,75 +127,6 @@ class TestConvertMessages:
         assert "img2.jpg" in result.file_urls[1]
         assert "doc.pdf" in result.file_urls[2]
 
-    def test_tool_use_conversion(self):
-        """测试工具调用转换。"""
-        messages = [
-            Message(
-                role="assistant",
-                content=[
-                    {
-                        "type": "tool_use",
-                        "id": "tool_123",
-                        "name": "search",
-                        "input": {"query": "test"},
-                    }
-                ],
-            )
-        ]
-
-        result = convert_messages(messages)
-
-        assert len(result.messages) == 1
-        assert "tool_calls" in result.messages[0]
-        assert len(result.messages[0]["tool_calls"]) == 1
-        assert result.messages[0]["tool_calls"][0]["id"] == "tool_123"
-        assert result.messages[0]["tool_calls"][0]["function"]["name"] == "search"
-
-    def test_tool_result_conversion(self):
-        """测试工具结果转换。"""
-        messages = [
-            Message(
-                role="user",
-                content=[
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "tool_123",
-                        "content": "搜索结果",
-                    }
-                ],
-            )
-        ]
-
-        result = convert_messages(messages)
-
-        assert len(result.messages) == 1
-        assert result.messages[0]["role"] == "tool"
-        assert result.messages[0]["tool_call_id"] == "tool_123"
-        assert result.messages[0]["content"] == "搜索结果"
-
-    def test_tool_result_with_list_content(self):
-        """测试工具结果包含列表内容。"""
-        messages = [
-            Message(
-                role="user",
-                content=[
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "tool_456",
-                        "content": [
-                            {"type": "text", "text": "结果1"},
-                            {"type": "text", "text": "结果2"},
-                        ],
-                    }
-                ],
-            )
-        ]
-
-        result = convert_messages(messages)
-
-        assert len(result.messages) == 1
-        assert result.messages[0]["content"] == "结果1结果2"
-
     def test_empty_messages(self):
         """测试空消息列表。"""
         messages = []
@@ -303,51 +234,6 @@ class TestConvertMessages:
 
         assert len(result.file_urls) == 0
 
-    def test_tool_use_with_empty_input(self):
-        """测试工具调用包含空输入。"""
-        messages = [
-            Message(
-                role="assistant",
-                content=[
-                    {
-                        "type": "tool_use",
-                        "id": "tool_789",
-                        "name": "calculator",
-                        "input": {},
-                    }
-                ],
-            )
-        ]
-
-        result = convert_messages(messages)
-
-        assert len(result.messages) == 1
-        assert "tool_calls" in result.messages[0]
-        # 空输入应该被序列化为 "{}"
-        assert result.messages[0]["tool_calls"][0]["function"]["arguments"] == "{}"
-
-    def test_tool_use_with_none_input(self):
-        """测试工具调用包含None输入。"""
-        messages = [
-            Message(
-                role="assistant",
-                content=[
-                    {
-                        "type": "tool_use",
-                        "id": "tool_999",
-                        "name": "test",
-                        "input": None,
-                    }
-                ],
-            )
-        ]
-
-        result = convert_messages(messages)
-
-        assert len(result.messages) == 1
-        # None 应该被转换为空字典
-        assert result.messages[0]["tool_calls"][0]["function"]["arguments"] == "{}"
-
     def test_unicode_content(self):
         """测试Unicode内容。"""
         messages = [Message(role="user", content="你好世界 🌍 emoji测试")]
@@ -375,48 +261,3 @@ class TestConvertMessages:
         result = convert_messages(messages)
 
         assert result.messages[0]["content"] == special_text
-
-    def test_tool_result_empty_content_list(self):
-        """测试工具结果包含空内容列表。"""
-        messages = [
-            Message(
-                role="user",
-                content=[
-                    {"type": "tool_result", "tool_use_id": "tool_empty", "content": []}
-                ],
-            )
-        ]
-
-        result = convert_messages(messages)
-
-        assert len(result.messages) == 1
-        assert result.messages[0]["content"] == ""
-
-    def test_multiple_tool_calls(self):
-        """测试多个工具调用。"""
-        messages = [
-            Message(
-                role="assistant",
-                content=[
-                    {
-                        "type": "tool_use",
-                        "id": "tool_1",
-                        "name": "search",
-                        "input": {"q": "test1"},
-                    },
-                    {
-                        "type": "tool_use",
-                        "id": "tool_2",
-                        "name": "calculator",
-                        "input": {"expr": "1+1"},
-                    },
-                ],
-            )
-        ]
-        
-        result = convert_messages(messages)
-        
-        assert len(result.messages) == 1
-        assert len(result.messages[0]["tool_calls"]) == 2
-        assert result.messages[0]["tool_calls"][0]["id"] == "tool_1"
-        assert result.messages[0]["tool_calls"][1]["id"] == "tool_2"

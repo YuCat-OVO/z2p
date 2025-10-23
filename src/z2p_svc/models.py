@@ -3,9 +3,28 @@
 本模块定义API请求和响应的Pydantic模型，用于数据验证和序列化。
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Literal
 
 from pydantic import BaseModel, Field
+
+
+class ToolFunction(BaseModel):
+    """工具函数定义（OpenAI 兼容）。
+    
+    定义一个可调用的工具函数，包含名称、描述和参数模式。
+    """
+    name: str = Field(..., description="函数名称")
+    description: Optional[str] = Field(default=None, description="函数描述")
+    parameters: Dict[str, Any] = Field(..., description="函数参数的 JSON Schema")
+
+
+class Tool(BaseModel):
+    """工具定义（OpenAI 兼容）。
+    
+    表示一个可供模型调用的工具。
+    """
+    type: Literal["function"] = Field(default="function", description="工具类型（目前仅支持 function）")
+    function: ToolFunction = Field(..., description="函数定义")
 
 
 class Message(BaseModel):
@@ -13,14 +32,21 @@ class Message(BaseModel):
 
     表示对话中的单条消息，支持文本和多模态内容。
 
-    :param role: 消息角色（system/user/assistant）
+    :param role: 消息角色（system/user/assistant/tool）
     :param content: 消息内容，字符串或多模态内容数组
+    :param tool_calls: 工具调用列表（仅用于 assistant 角色）
+    :param tool_call_id: 工具调用 ID（仅用于 tool 角色）
     :type role: str
     :type content: Union[str, list]
+    :type tool_calls: Optional[List[Dict[str, Any]]]
+    :type tool_call_id: Optional[str]
     """
 
     role: str = Field(..., description="消息角色")
-    content: Union[str, list] = Field(..., description="消息内容")
+    content: Union[str, list, None] = Field(default=None, description="消息内容")
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(default=None, description="工具调用列表")
+    tool_call_id: Optional[str] = Field(default=None, description="工具调用 ID")
+    name: Optional[str] = Field(default=None, description="函数名称（用于 function 角色）")
 
 
 class ChatRequest(BaseModel):
@@ -41,12 +67,16 @@ class ChatRequest(BaseModel):
     :param temperature: 采样温度（0.0-2.0），较高值使输出更随机
     :param top_p: 核采样参数（0.0-1.0），建议与 temperature 二选一
     :param max_tokens: 生成的最大 token 数量
+    :param tools: 工具定义列表（用于 Toolify 模式）
+    :param tool_choice: 工具选择策略（auto/none 或指定工具）
     :type model: str
     :type messages: list[Message]
     :type stream: bool
     :type temperature: float
     :type top_p: float
     :type max_tokens: int
+    :type tools: Optional[List[Tool]]
+    :type tool_choice: Optional[Union[str, Dict]]
     
     .. seealso::
        :class:`Message` - 消息对象
@@ -59,6 +89,8 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="采样温度")
     top_p: float = Field(default=0.9, ge=0.0, le=1.0, description="核采样参数")
     max_tokens: int = Field(default=8192, ge=1, description="最大token数")
+    tools: Optional[List[Tool]] = Field(default=None, description="工具定义列表")
+    tool_choice: Optional[Union[str, Dict]] = Field(default=None, description="工具选择策略")
     accept_language: Optional[str] = Field(
         default=None,
         description="客户端的 Accept-Language 头部值，用于传递给上游 API"
@@ -340,6 +372,7 @@ class ChatCompletionChunkDelta(BaseModel):
     role: Optional[str] = Field(default=None, description="消息角色（assistant）")
     content: Optional[str] = Field(default=None, description="增量文本内容")
     reasoning_content: Optional[str] = Field(default=None, description="推理过程内容（thinking 阶段）")
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(default=None, description="工具调用列表（流式）")
 
 
 class ChatCompletionChunkChoice(BaseModel):
@@ -373,7 +406,8 @@ class ChatCompletionChunk(BaseModel):
 class ChatCompletionMessage(BaseModel):
     """聊天补全的完整消息对象。"""
     role: str = Field(..., description="消息角色（assistant）")
-    content: str = Field(..., description="完整的消息内容")
+    content: Optional[str] = Field(default=None, description="完整的消息内容")
+    tool_calls: Optional[List[Dict[str, Any]]] = Field(default=None, description="工具调用列表")
 
 
 class ChatCompletionChoice(BaseModel):

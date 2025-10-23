@@ -193,6 +193,20 @@ async def prepare_request_data(
         )
     
     converted = convert_messages(chat_request.messages)
+    
+    # 检查是否需要启用 toolify
+    enable_toolify = chat_request.tools is not None and len(chat_request.tools) > 0
+    
+    if enable_toolify and chat_request.tools:
+        # 注入工具提示词
+        from .services.toolify.prompt import inject_tool_prompt
+        converted_messages = inject_tool_prompt(
+            converted.messages,
+            [tool.model_dump() for tool in chat_request.tools]
+        )
+        logger.info(f"[TOOLIFY] 已启用，工具数量: {len(chat_request.tools)}")
+    else:
+        converted_messages = converted.messages
 
     # chat_id 应该在会话开始时生成一次，然后在整个会话中复用
     # 这里每次都生成新的ID是为了模拟新会话，实际应用中应该从请求中获取或维护会话状态
@@ -260,7 +274,7 @@ async def prepare_request_data(
     zai_data = UpstreamRequestData(
         stream=True,
         model=upstream_model_id,
-        messages=converted.messages,
+        messages=converted_messages,
         signature_prompt=converted.last_user_message_text,
         variables={
             "{{USER_LOCATION}}": "Unknown",  # 添加用户位置变量（默认值）
@@ -650,7 +664,9 @@ def process_streaming_response(
     .. note::
        响应格式遵循OpenAI的流式API规范。
     """
-    return _process_streaming_response(chat_request, access_token, prepare_request_data)
+    # 检查是否启用 toolify
+    enable_toolify = chat_request.tools is not None and len(chat_request.tools) > 0
+    return _process_streaming_response(chat_request, access_token, prepare_request_data, enable_toolify)
 
 
 async def process_non_streaming_response(

@@ -135,13 +135,14 @@ def create_error_chunk(
 
 
 async def process_streaming_response(
-    chat_request: ChatRequest, access_token: str, prepare_request_data_func
+    chat_request: ChatRequest, access_token: str, prepare_request_data_func, enable_toolify: bool = False
 ) -> AsyncGenerator[str, None]:
     """处理流式响应。
 
     :param chat_request: 聊天请求对象
     :param access_token: 访问令牌
     :param prepare_request_data_func: 用于准备请求数据的函数
+    :param enable_toolify: 是否启用 toolify 模式
     :yields: SSE格式的数据块
     :raises UpstreamAPIError: 当上游API返回错误状态码时
 
@@ -226,6 +227,13 @@ async def process_streaming_response(
                 timestamp = int(datetime.now().timestamp())
                 chunk_id = generate_completion_id()
                 chunk_count = 0
+                
+                # 初始化 toolify 检测器
+                detector = None
+                if enable_toolify:
+                    from ..toolify.detector import StreamingToolCallDetector
+                    detector = StreamingToolCallDetector()
+                    logger.info("[TOOLIFY] 流式检测器已启用")
 
                 async for line in response.aiter_lines():
                     if not line:
@@ -279,15 +287,30 @@ async def process_streaming_response(
                         # 使用预编译正则快速清理
                         if "</details>" in content:
                             content = DETAILS_PATTERN.split(content)[-1]
-                        chunk_count += 1
-                        if settings.verbose_logging:
-                            logger.debug(
-                                "Streaming answer chunk: request_id={}, chunks={}, content={}",
-                                request_id,
-                                chunk_count,
-                                content[:200],
-                            )
-                        yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
+                        
+                        # 如果启用了 toolify，使用检测器处理内容
+                        if detector:
+                            is_tool, output_content = detector.process_chunk(content)
+                            if output_content:
+                                chunk_count += 1
+                                if settings.verbose_logging:
+                                    logger.debug(
+                                        "Streaming answer chunk (toolify): request_id={}, chunks={}, content={}",
+                                        request_id,
+                                        chunk_count,
+                                        output_content[:200],
+                                    )
+                                yield f"data: {json_dumps(create_chat_completion_chunk(output_content, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
+                        else:
+                            chunk_count += 1
+                            if settings.verbose_logging:
+                                logger.debug(
+                                    "Streaming answer chunk: request_id={}, chunks={}, content={}",
+                                    request_id,
+                                    chunk_count,
+                                    content[:200],
+                                )
+                            yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
 
                     elif phase == "tool_call":
                         content = data.get("delta_content") or data.get(
@@ -325,6 +348,32 @@ async def process_streaming_response(
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', chunk_id, usage, 'stop'))}\n\n"
 
                     elif phase == "done":
+                        # 如果启用了 toolify，finalize 检测器
+                        if detector:
+                            parsed_tools, remaining = detector.finalize()
+                            if remaining:
+                                yield f"data: {json_dumps(create_chat_completion_chunk(remaining, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
+                            
+                            if parsed_tools:
+                                # 转换为 OpenAI 格式并发送
+                                from ..toolify.parser import convert_to_openai_tool_calls
+                                tool_calls = convert_to_openai_tool_calls(parsed_tools)
+                                
+                                # 发送 tool_calls chunk
+                                tool_chunk = {
+                                    "id": chunk_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": timestamp,
+                                    "model": chat_request.model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"tool_calls": tool_calls},
+                                        "finish_reason": "tool_calls"
+                                    }]
+                                }
+                                yield f"data: {json_dumps(tool_chunk)}\n\n"
+                                logger.info(f"[TOOLIFY] 发送了 {len(tool_calls)} 个工具调用")
+                        
                         logger.info(
                             "Streaming finished: request_id={}, model={}, total_chunks={}",
                             request_id,
