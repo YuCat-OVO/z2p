@@ -753,7 +753,7 @@ class TestGLM46VFileHandling:
 
         with (
             patch("src.z2p_svc.model_service.get_models") as mock_get_models,
-            patch("src.z2p_svc.model_service.fetch_models_from_upstream") as mock_fetch_upstream,
+            patch("src.z2p_svc.model_service.get_upstream_models_cache") as mock_get_cache,
             patch("src.z2p_svc.chat_service.convert_messages") as mock_convert,
             patch(
                 "src.z2p_svc.signature_generator.generate_signature"
@@ -774,20 +774,18 @@ class TestGLM46VFileHandling:
                 ]
             }
             
-            # Mock上游模型数据（包含完整的meta信息）
-            mock_fetch_upstream.return_value = {
-                "data": [
-                    {
+            # Mock上游模型缓存
+            mock_get_cache.return_value = [
+                {
+                    "id": "glm-4.5v",
+                    "info": {
                         "id": "glm-4.5v",
-                        "info": {
-                            "id": "glm-4.5v",
-                            "meta": {
-                                "capabilities": {"vision": True}
-                            }
-                        },
-                    }
-                ]
-            }
+                        "meta": {
+                            "capabilities": {"vision": True}
+                        }
+                    },
+                }
+            ]
 
             class MockConvertResult:
                 messages = [{"role": "user", "content": "看图"}]
@@ -885,7 +883,7 @@ class TestGLM46VFileHandling:
 
         with (
             patch("src.z2p_svc.model_service.get_models") as mock_get_models,
-            patch("src.z2p_svc.model_service.fetch_models_from_upstream") as mock_fetch_upstream,
+            patch("src.z2p_svc.model_service.get_upstream_models_cache") as mock_get_cache,
             patch(
                 "src.z2p_svc.services.chat.converter.convert_messages"
             ) as mock_convert,
@@ -908,21 +906,19 @@ class TestGLM46VFileHandling:
                 ]
             }
             
-            # Mock上游模型数据（包含完整的meta信息）
-            mock_fetch_upstream.return_value = {
-                "data": [
-                    {
+            # Mock上游模型缓存
+            mock_get_cache.return_value = [
+                {
+                    "id": "GLM-4-6-API-V1",
+                    "info": {
                         "id": "GLM-4-6-API-V1",
-                        "info": {
-                            "id": "GLM-4-6-API-V1",
-                            "meta": {
-                                "capabilities": {"think": True},
-                                "mcpServerIds": ["upstream-mcp-1", "upstream-mcp-2"]
-                            }
-                        },
-                    }
-                ]
-            }
+                        "meta": {
+                            "capabilities": {"think": True},
+                            "mcpServerIds": ["upstream-mcp-1", "upstream-mcp-2"]
+                        }
+                    },
+                }
+            ]
 
             class MockConvertResult:
                 messages = [{"role": "user", "content": "测试"}]

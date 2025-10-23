@@ -176,16 +176,17 @@ async def prepare_request_data(
     )
     
     # 预加载模型映射表以支持动态模型ID转换
-    from .model_service import get_models, fetch_models_from_upstream
+    from .model_service import get_models, get_upstream_models_cache
     models = []  # 初始化 models 变量（下游模型列表）
     upstream_models = []  # 上游模型列表（包含完整的 meta 信息）
     try:
         models_data = await get_models(access_token=access_token, use_cache=True)
         models = models_data.get("data", [])
         
-        # 直接从上游获取完整的模型信息（包含 meta）
-        upstream_data = await fetch_models_from_upstream(access_token)
-        upstream_models = upstream_data.get("data", [])
+        # 从缓存获取上游模型信息（避免重复请求）
+        upstream_models = get_upstream_models_cache()
+        if not upstream_models:
+            logger.warning("Upstream models cache is empty, will use limited model info")
     except Exception as e:
         logger.warning(
             "Failed to fetch models for mapping initialization: error={}. Will use existing mappings.",
@@ -382,7 +383,7 @@ async def prepare_request_data(
                 else:
                     url_type = "unknown"
                 
-                logger.info(
+                logger.debug(
                     "File upload attempt: index={}/{}, url_type={}, url_preview={}, request_id={}",
                     idx + 1,
                     len(file_urls),
@@ -433,7 +434,7 @@ async def prepare_request_data(
                     return None
 
                 if file_object:
-                    logger.info(
+                    logger.debug(
                         "File uploaded successfully: index={}/{}, file_id={}, media={}, request_id={}",
                         idx + 1,
                         len(file_urls),
@@ -509,7 +510,7 @@ async def prepare_request_data(
         if not has_vision:
             if uploaded_file_objects:
                 zai_data.files = uploaded_file_objects
-                logger.info(
+                logger.debug(
                     "Non-vision model: all files added to top-level files array: total_count={}, image_count={}, video_count={}, other_count={}, request_id={}",
                     len(uploaded_file_objects),
                     sum(1 for f in image_video_files if f["media"] == "image"),
@@ -552,7 +553,7 @@ async def prepare_request_data(
                             "content": content_array
                         }
                         
-                        logger.info(
+                        logger.debug(
                             "Message reconstructed with media files: text_length={}, image_count={}, video_count={}, request_id={}",
                             len(text_content),
                             sum(1 for f in image_video_files if f["media"] == "image"),
@@ -563,7 +564,7 @@ async def prepare_request_data(
             # 只有非图片/视频文件才放入顶层files数组
             if other_files:
                 zai_data.files = other_files
-                logger.info(
+                logger.debug(
                     "Non-media files added to top-level files array: count={}, request_id={}",
                     len(other_files),
                     zai_data.id,
@@ -633,20 +634,29 @@ async def prepare_request_data(
 
     files_processed = bool(converted.file_urls)
     
-    # 为日志创建数据副本，移除 model_item 以避免污染日志
-    zai_data_dict = zai_data.model_dump()
-    log_data = {k: v for k, v in zai_data_dict.items() if k != "model_item"}
-    
+    # info 等级：输出关键摘要信息
     logger.info(
-        "Request data prepared successfully: chat_id={}, request_id={}, model={}, upstream_model={}, streaming={}, files_processed={}, data={}",
+        "Request prepared: chat_id={}, request_id={}, model={}, upstream_model={}, streaming={}, messages={}, files={}, features={}",
         zai_data.chat_id,
         params.requestId,
         chat_request.model,
         zai_data.model,
         streaming,
-        files_processed,
-        log_data,
+        len(zai_data.messages),
+        len(zai_data.files) if zai_data.files else 0,
+        list(zai_data.features.keys()) if zai_data.features else []
     )
+    
+    # debug 等级：输出完整数据（用于调试）
+    if settings.verbose_logging:
+        zai_data_dict = zai_data.model_dump()
+        log_data = {k: v for k, v in zai_data_dict.items() if k != "model_item"}
+        logger.debug(
+            "Request data details: chat_id={}, request_id={}, data={}",
+            zai_data.chat_id,
+            params.requestId,
+            log_data,
+        )
 
     return zai_data.model_dump(), params.model_dump(), headers
 

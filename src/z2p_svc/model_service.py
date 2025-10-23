@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 _models_cache: dict[str, Any] | None = None
+_upstream_models_cache: list[dict[str, Any]] = []
 
 # 定义所有可能的功能开关及其尾缀和描述
 # 这里的键名应与 UpstreamCapability 中的字段名一致
@@ -223,8 +224,13 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     
     logger.info("Fetching fresh models from upstream: use_cache={}", use_cache)
     
+    global _upstream_models_cache
+    
     upstream_raw_data = await fetch_models_from_upstream(access_token)
     upstream_data = UpstreamModelsResponse.model_validate(upstream_raw_data)
+    
+    # 缓存上游原始数据
+    _upstream_models_cache = upstream_raw_data.get("data", [])
     
     default_logo = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2030%2030%22%20style%3D%22background%3A%232D2D2D%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M15.47%207.1l-1.3%201.85c-.2.29-.54.47-.9.47h-7.1V7.09c0%20.01%209.31.01%209.31.01z%22%2F%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M24.3%207.1L13.14%2022.91H5.7l11.16-15.81z%22%2F%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M14.53%2022.91l1.31-1.86c.2-.29.54-.47.9-.47h7.09v2.33h-9.3z%22%2F%3E%3C%2Fsvg%3E"
     
@@ -434,12 +440,22 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     return result.model_dump()  # 返回 Pydantic 模型转换为字典
 
 
+def get_upstream_models_cache() -> list[dict[str, Any]]:
+    """获取缓存的上游模型列表。
+    
+    :return: 上游模型列表（包含完整的 meta 信息）
+    :rtype: list[dict[str, Any]]
+    """
+    return _upstream_models_cache
+
+
 def clear_models_cache() -> None:
     """清除模型列表缓存。
     
     .. note::
        清除缓存后，下次调用 :func:`get_models` 将重新从上游 API 获取数据
     """
-    global _models_cache
+    global _models_cache, _upstream_models_cache
     _models_cache = None
+    _upstream_models_cache = []
     logger.debug("Models cache cleared")
