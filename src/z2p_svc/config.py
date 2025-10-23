@@ -226,7 +226,7 @@ class AppConfig(BaseSettings):
         return {
             "Content-Type": "application/json",
             "Origin": f"{self.protocol}//{self.base_url}",
-            "X-FE-Version": "prod-fe-1.0.106",
+            "X-FE-Version": "prod-fe-1.0.108",
         }
 
     @property
