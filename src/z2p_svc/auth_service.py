@@ -15,7 +15,7 @@ from curl_cffi.requests import AsyncSession
 from typing import TypedDict
 
 from .config import get_settings
-from .logger import get_logger
+from .logger import get_logger, json_str
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -71,7 +71,7 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
                 "Acw_tc cookie fetched: url={}, status_code={}, cookies={}, has_acw_tc={}",
                 chat_page_url,
                 response.status_code,
-                cookie_keys,
+                json_str(cookie_keys),
                 has_acw_tc,
             )
             
@@ -149,7 +149,7 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
                 auth_token = data.get("token")
                 
                 if not user_id:
-                    logger.error("Auth response missing user_id: response_data={}", data)
+                    logger.error("Auth response missing user_id: response_data={}", json_str(data))
                     raise Exception("认证响应中缺少 user_id")
                 
                 response_cookies = dict(response.cookies)
@@ -162,7 +162,7 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
                     user_id,
                     user_name,
                     auth_token,
-                    cookie_keys,
+                    json_str(cookie_keys),
                     has_acw_tc,
                 )
                 
@@ -228,7 +228,7 @@ async def get_user_info(access_token: str, chat_id: str | None = None) -> UserIn
         user_id,
         user_name,
         auth_token,
-        cookie_keys,
+        json_str(cookie_keys),
         has_acw_tc,
     )
     

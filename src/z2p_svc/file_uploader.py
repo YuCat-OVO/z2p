@@ -18,7 +18,7 @@ from curl_cffi.requests import AsyncSession
 
 from .config import get_settings
 from .exceptions import FileUploadError
-from .logger import get_logger
+from .logger import get_logger, json_str
 from .models import UploadedFileObject
 from .utils.uuid_helper import generate_uuid_str
 
@@ -120,7 +120,7 @@ class FileUploader:
                 len(access_token),
                 access_token,
                 self.chat_id,
-                cookie_keys,
+                json_str(cookie_keys),
                 has_acw_tc,
             )
 
@@ -255,7 +255,7 @@ class FileUploader:
                 "File upload request details: filename={}, upload_url={}, headers={}",
                 filename,
                 self.upload_url,
-                {k: v if k.lower() != 'authorization' else v[:20] + '...' for k, v in self._get_headers().items()}, # 脱敏 Authorization
+                json_str({k: v if k.lower() != 'authorization' else v[:20] + '...' for k, v in self._get_headers().items()}), # 脱敏 Authorization
             )
 
         try:
@@ -295,7 +295,7 @@ class FileUploader:
                         "Upload response received: filename={}, status_code={}, response={}",
                         filename,
                         response.status_code,
-                        result
+                        json_str(result)
                     )
                 
                 file_id = result.get("id")
@@ -325,7 +325,7 @@ class FileUploader:
                     )
                     return file_object.model_dump()
                 else:
-                    logger.error("Upload response missing data: response={}", result)
+                    logger.error("Upload response missing data: response={}", json_str(result))
                     return None
 
         except Exception as e:

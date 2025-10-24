@@ -22,7 +22,7 @@ except ImportError:
 
 from ...config import get_settings
 from ...exceptions import UpstreamAPIError
-from ...logger import get_logger
+from ...logger import get_logger, json_str as log_json
 from ...models import (
     ChatRequest,
     ChatCompletionMessage,
@@ -92,12 +92,12 @@ async def process_non_streaming_response(
                 "Non-streaming request details: request_id={}, upstream_url={}, headers={}, params={}, json_body={}",
                 request_id,
                 f"{settings.proxy_url}/api/chat/completions",
-                {
+                log_json({
                     k: v if k.lower() != "authorization" else v[:20] + "..."
                     for k, v in headers.items()
-                },
-                params,
-                log_data,
+                }),
+                log_json(params),
+                log_json(log_data),
             )
 
         try:

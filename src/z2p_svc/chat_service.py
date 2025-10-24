@@ -11,7 +11,7 @@ from typing import Any, AsyncGenerator
 
 from .config import get_settings
 from .file_uploader import FileUploader
-from .logger import get_logger
+from .logger import get_logger, json_str
 from .models import (
     ChatRequest,
     ModelFeatures,
@@ -124,7 +124,7 @@ def get_model_features(model: str, streaming: bool, model_meta: dict[str, Any] |
                 if server not in mcp_servers:
                     mcp_servers.append(server)
             if settings.verbose_logging:
-                logger.debug("Merged upstream MCP servers: model={}, mcp_servers={}", model, mcp_servers)
+                logger.debug("Merged upstream MCP servers: model={}, mcp_servers={}", model, json_str(mcp_servers))
 
     return {"features": features.model_dump(), "mcp_servers": mcp_servers}
 
@@ -256,7 +256,7 @@ async def prepare_request_data(
         if settings.verbose_logging:
             logger.debug(
                 "Model mapping chain: {}",
-                " -> ".join(mapping_chain)
+                json_str(mapping_chain)
             )
     elif chat_request.model not in settings.REVERSE_MODELS_MAPPING:
         logger.warning(
@@ -327,8 +327,8 @@ async def prepare_request_data(
                     "Found upstream model: model={}, upstream_id={}, capabilities={}, mcp_servers={}",
                     chat_request.model,
                     upstream_model_id,
-                    list(model_capabilities.keys()) if model_capabilities else [],
-                    model_meta.get("mcpServerIds", [])
+                    json_str(list(model_capabilities.keys()) if model_capabilities else []),
+                    json_str(model_meta.get("mcpServerIds", []))
                 )
             break
     
@@ -644,7 +644,7 @@ async def prepare_request_data(
         streaming,
         len(zai_data.messages),
         len(zai_data.files) if zai_data.files else 0,
-        list(zai_data.features.keys()) if zai_data.features else []
+        json_str(list(zai_data.features.keys()) if zai_data.features else [])
     )
     
     # debug 等级：输出完整数据（用于调试）
@@ -655,7 +655,7 @@ async def prepare_request_data(
             "Request data details: chat_id={}, request_id={}, data={}",
             zai_data.chat_id,
             params.requestId,
-            log_data,
+            json_str(log_data),
         )
 
     return zai_data.model_dump(), params.model_dump(), headers

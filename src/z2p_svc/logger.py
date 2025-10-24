@@ -5,6 +5,8 @@
 """
 
 import sys
+from typing import Any
+import orjson
 from loguru import logger
 
 
@@ -82,6 +84,15 @@ def configure_logging(log_level: str = "INFO", use_colors: bool = True, verbose:
             )
 
 
+def json_str(obj: Any) -> str:
+    """将对象格式化为JSON字符串用于日志输出。
+    
+    :param obj: 要格式化的对象（字典、列表等）
+    :return: JSON格式的字符串
+    """
+    return orjson.dumps(obj).decode('utf-8')
+
+
 def get_logger(name: str | None = None):
     """获取logger实例。
 
@@ -90,14 +101,16 @@ def get_logger(name: str | None = None):
 
     Example::
 
-        >>> from z2p_svc.logger import get_logger
+        >>> from z2p_svc.logger import get_logger, json_str
         >>> logger = get_logger(__name__)
         >>> logger.info("Application started with version {}", "1.0.0")
         >>> logger.debug("Processing request: request_id={}, user_id={}", "123", "456")
         >>> logger.error("Request failed: {}", "Connection timeout")
+        >>> logger.info("Request data: {}", json_str({"key": "value"}))
     
     .. note::
        loguru使用{}占位符进行字符串格式化，而不是结构化的键值对。
        例如：logger.info("User {} logged in", username)
+       对于结构化数据，使用json_str()函数格式化：logger.info("Data: {}", json_str(data))
     """
     return logger

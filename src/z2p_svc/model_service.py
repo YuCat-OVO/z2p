@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 from datetime import datetime
 
 from .config import get_settings
-from .logger import get_logger
+from .logger import get_logger, json_str
 from .models import (
     UpstreamModelsResponse,
     DownstreamModelsResponse,
@@ -435,7 +435,7 @@ async def get_models(access_token: str | None = None, use_cache: bool = True) ->
     )
     
     if settings.verbose_logging:
-        logger.debug("Current reverse mappings: {}", dict(settings.REVERSE_MODELS_MAPPING))
+        logger.debug("Current reverse mappings: {}", json_str(dict(settings.REVERSE_MODELS_MAPPING)))
     
     return result.model_dump()  # 返回 Pydantic 模型转换为字典
 
