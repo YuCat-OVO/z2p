@@ -106,7 +106,7 @@ async def process_non_streaming_response(
                 headers=headers,
                 params=params,
                 json=zai_data,
-                timeout=300.0,
+                timeout=float(settings.timeout_chat),
                 stream=True,  # 接收SSE流
             )
             

@@ -141,7 +141,7 @@ async def fetch_models_from_upstream(access_token: str | None = None) -> dict[st
             response = await session.get(
                 models_url,
                 headers=headers,
-                timeout=10.0,
+                timeout=float(settings.timeout_model_list),
                 allow_redirects=True,
             )
             

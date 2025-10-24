@@ -202,7 +202,7 @@ async def process_streaming_response(
                 headers=headers,
                 params=params,
                 json=zai_data,
-                timeout=300,
+                timeout=float(settings.timeout_chat),
                 stream=True,
             )
             try:

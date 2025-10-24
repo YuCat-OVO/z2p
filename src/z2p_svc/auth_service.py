@@ -58,7 +58,7 @@ async def fetch_acw_tc_cookie(access_token: str) -> dict[str, str]:
             response = await session.get(
                 chat_page_url,
                 headers=headers,
-                timeout=10.0,
+                timeout=float(settings.timeout_auth),
                 allow_redirects=True,
             )
             
@@ -138,7 +138,7 @@ async def authenticate_with_cookies(access_token: str, chat_id: str | None = Non
             response = await session.get(
                 auth_url,
                 headers=headers,
-                timeout=10.0,
+                timeout=float(settings.timeout_auth),
                 allow_redirects=True,
             )
             

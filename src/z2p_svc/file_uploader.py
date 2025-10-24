@@ -277,7 +277,7 @@ class FileUploader:
                     self.upload_url,
                     headers=self._get_headers(),
                     multipart=multipart,
-                    timeout=30.0,
+                    timeout=float(self.settings.timeout_file_upload),
                 )
                 if response.status_code >= 400:
                     logger.error(
@@ -353,7 +353,7 @@ class FileUploader:
             logger.info("Starting file download from URL: url={}", file_url)
             
             async with AsyncSession(impersonate=self.settings.get_browser_version()) as session:  # type: ignore
-                response = await session.get(file_url, timeout=30.0)
+                response = await session.get(file_url, timeout=float(self.settings.timeout_file_upload))
                 if response.status_code >= 400:
                     raise Exception(f"HTTP {response.status_code}")
 

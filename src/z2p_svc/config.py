@@ -127,6 +127,11 @@ class AppConfig(BaseSettings):
         description="是否启用详细日志模式"
     )
     
+    fe_version: str = Field(
+        default="prod-fe-1.0.109",
+        description="前端版本号（可自动获取）"
+    )
+    
     proxy_url: str = Field(
         default="https://chat.z.ai",
         description="代理目标URL"
@@ -157,6 +162,49 @@ class AppConfig(BaseSettings):
     enable_mihomo_switch: bool = Field(
         default=False,
         description="是否启用 Mihomo 切换"
+    )
+    
+    # FE 版本管理配置
+    fe_version_source_url: str = Field(
+        default="https://chat.z.ai",
+        description="FE版本获取源URL"
+    )
+    fe_version_cache_ttl: int = Field(
+        default=1800,
+        ge=60,
+        description="FE版本缓存时间(秒)"
+    )
+    fe_version_update_interval: int = Field(
+        default=1800,
+        ge=60,
+        description="FE版本自动更新间隔(秒)"
+    )
+    
+    # HTTP 超时配置（秒）
+    timeout_chat: int = Field(
+        default=300,
+        ge=30,
+        description="聊天请求超时(秒)"
+    )
+    timeout_proxy_switch: int = Field(
+        default=5,
+        ge=1,
+        description="代理切换超时(秒)"
+    )
+    timeout_model_list: int = Field(
+        default=10,
+        ge=5,
+        description="模型列表获取超时(秒)"
+    )
+    timeout_file_upload: int = Field(
+        default=30,
+        ge=10,
+        description="文件上传超时(秒)"
+    )
+    timeout_auth: int = Field(
+        default=10,
+        ge=5,
+        description="认证请求超时(秒)"
     )
     
     # curl_cffi 浏览器模拟配置
@@ -226,7 +274,7 @@ class AppConfig(BaseSettings):
         return {
             "Content-Type": "application/json",
             "Origin": f"{self.protocol}//{self.base_url}",
-            "X-FE-Version": "prod-fe-1.0.108",
+            "X-FE-Version": self.fe_version,
         }
 
     @property
@@ -308,4 +356,5 @@ def get_settings() -> AppConfig:
     # 在开发环境中，为了方便测试，如果未设置环境变量，则提供一个默认值
     if os.getenv("APP_ENV") == "development" and "SECRET_KEY" not in os.environ:
         os.environ["SECRET_KEY"] = "default_dev_secret_key_for_testing"
+    
     return AppConfig()

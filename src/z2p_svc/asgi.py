@@ -50,6 +50,36 @@ async def initialize_services() -> None:
 
         logger.info("Initializing application services...")
 
+        # 初始化 FE 版本
+        try:
+            from .fe_version import initialize_fe_version, start_background_update
+            browser_version = settings.get_browser_version()
+            fallback_version = settings.fe_version
+            logger.info(
+                "开始初始化FE版本: browser={}, fallback={}",
+                browser_version,
+                fallback_version
+            )
+            
+            version = await initialize_fe_version(browser_version, fallback_version)
+            settings.fe_version = version
+            source = "auto" if version != fallback_version else "config"
+            logger.info(
+                "FE版本初始化成功: version={}, source={}",
+                version,
+                source
+            )
+            
+            # 启动后台更新任务
+            start_background_update(settings.get_browser_version)
+            logger.info("FE版本后台更新任务已启动: interval_seconds=1800")
+        except Exception as e:
+            logger.warning(
+                "FE版本初始化失败，使用配置值: error={}, fallback={}",
+                str(e),
+                settings.fe_version
+            )
+
         logger.info(
             "Application services initialized successfully: env={}, host={}, port={}",
             settings.app_env,
@@ -75,6 +105,14 @@ async def shutdown_services() -> None:
         return
 
     logger.info("Shutting down application services...")
+
+    # 停止 FE 版本后台更新任务
+    try:
+        from .fe_version import stop_background_update
+        stop_background_update()
+        logger.info("FE版本后台更新任务已停止")
+    except Exception as e:
+        logger.error("停止FE版本后台更新失败: error={}", str(e))
 
     logger.info("Application services shut down successfully")
     _initialized = False

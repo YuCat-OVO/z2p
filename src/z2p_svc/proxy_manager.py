@@ -26,7 +26,7 @@ async def switch_proxy_node() -> bool:
             resp = await session.get(
                 f"{settings.mihomo_api_url}/proxies",
                 headers=headers,
-                timeout=5
+                timeout=float(settings.timeout_proxy_switch)
             )
             if resp.status_code != 200:
                 logger.error("Failed to get proxies: status={}", resp.status_code)
@@ -68,7 +68,7 @@ async def switch_proxy_node() -> bool:
                 f"{settings.mihomo_api_url}/proxies/{proxy_group}",
                 headers=headers,
                 json={"name": next_node},
-                timeout=5
+                timeout=float(settings.timeout_proxy_switch)
             )
             
             if switch_resp.status_code == 204:
