@@ -5,8 +5,15 @@
 
 from .core import ToolifyCore, get_toolify_core, generate_random_trigger_signal
 from .detector import StreamingToolCallDetector
-from .parser import parse_tool_calls_xml, convert_to_openai_tool_calls
-from .prompt import generate_tools_prompt, inject_tool_prompt, TRIGGER_SIGNAL
+from .parser import parse_tool_calls_xml, convert_to_openai_tool_calls, remove_think_blocks
+from .prompt import (
+    generate_function_prompt,
+    generate_tools_prompt,
+    get_function_call_prompt_template,
+    inject_tool_prompt,
+    safe_process_tool_choice,
+    TRIGGER_SIGNAL,
+)
 
 __all__ = [
     "ToolifyCore",
@@ -15,7 +22,11 @@ __all__ = [
     "StreamingToolCallDetector",
     "parse_tool_calls_xml",
     "convert_to_openai_tool_calls",
+    "remove_think_blocks",
+    "generate_function_prompt",
     "generate_tools_prompt",
+    "get_function_call_prompt_template",
     "inject_tool_prompt",
+    "safe_process_tool_choice",
     "TRIGGER_SIGNAL",
 ]

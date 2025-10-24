@@ -6,6 +6,8 @@
 import json
 import secrets
 import string
+import threading
+import time
 import uuid
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional
@@ -26,46 +28,119 @@ def generate_random_trigger_signal() -> str:
 
 
 class ToolCallMappingManager:
-    """工具调用映射管理器（简化版，无TTL）。"""
+    """工具调用映射管理器（带TTL和大小限制）。
+    
+    功能：
+    1. 自动过期清理 - 条目在指定时间后自动删除
+    2. 大小限制 - 防止内存无限增长
+    3. LRU驱逐 - 达到大小限制时删除最少使用的条目
+    4. 线程安全 - 支持并发访问
+    5. 周期性清理 - 后台线程定期清理过期条目
+    """
 
-    def __init__(self, max_size: int = 1000):
+    def __init__(self, max_size: int = 1000, ttl_seconds: int = 3600, cleanup_interval: int = 300):
         """初始化映射管理器。
         
         :param max_size: 最大存储条目数
+        :param ttl_seconds: 条目生存时间（秒）
+        :param cleanup_interval: 清理间隔（秒）
         """
         self.max_size = max_size
+        self.ttl_seconds = ttl_seconds
+        self.cleanup_interval = cleanup_interval
+        
         self._data: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        self._timestamps: Dict[str, float] = {}
+        self._lock = threading.RLock()
+        
+        self._cleanup_thread = threading.Thread(target=self._periodic_cleanup, daemon=True)
+        self._cleanup_thread.start()
+        
+        logger.debug(f"[TOOLIFY] 工具调用映射管理器已启动 - 最大条目: {max_size}, TTL: {ttl_seconds}s")
 
-    def store(self, tool_call_id: str, name: str, args: dict) -> None:
+    def store(self, tool_call_id: str, name: str, args: dict, description: str = "") -> None:
         """存储工具调用映射。
         
         :param tool_call_id: 工具调用ID
         :param name: 工具名称
         :param args: 工具参数
+        :param description: 工具描述
         """
-        if tool_call_id in self._data:
-            del self._data[tool_call_id]
+        with self._lock:
+            current_time = time.time()
+            
+            if tool_call_id in self._data:
+                del self._data[tool_call_id]
+                del self._timestamps[tool_call_id]
 
-        while len(self._data) >= self.max_size:
-            oldest_key = next(iter(self._data))
-            del self._data[oldest_key]
-            logger.debug(f"[TOOLIFY] 因大小限制移除最旧条目: {oldest_key}")
+            while len(self._data) >= self.max_size:
+                oldest_key = next(iter(self._data))
+                del self._data[oldest_key]
+                del self._timestamps[oldest_key]
+                logger.debug(f"[TOOLIFY] 因大小限制移除最旧条目: {oldest_key}")
 
-        self._data[tool_call_id] = {"name": name, "args": args}
-        logger.debug(f"[TOOLIFY] 存储工具调用映射: {tool_call_id} -> {name}")
+            self._data[tool_call_id] = {
+                "name": name,
+                "args": args,
+                "description": description,
+                "created_at": current_time
+            }
+            self._timestamps[tool_call_id] = current_time
+            
+            logger.debug(f"[TOOLIFY] 存储工具调用映射: {tool_call_id} -> {name}")
 
     def get(self, tool_call_id: str) -> Optional[Dict[str, Any]]:
-        """获取工具调用映射。
+        """获取工具调用映射（更新LRU顺序）。
         
         :param tool_call_id: 工具调用ID
         :return: 工具信息字典或None
         """
-        if tool_call_id not in self._data:
-            return None
+        with self._lock:
+            current_time = time.time()
+            
+            if tool_call_id not in self._data:
+                logger.debug(f"[TOOLIFY] 未找到工具调用映射: {tool_call_id}")
+                return None
+            
+            if current_time - self._timestamps[tool_call_id] > self.ttl_seconds:
+                logger.debug(f"[TOOLIFY] 工具调用映射已过期: {tool_call_id}")
+                del self._data[tool_call_id]
+                del self._timestamps[tool_call_id]
+                return None
 
-        result = self._data[tool_call_id]
-        self._data.move_to_end(tool_call_id)
-        return result
+            result = self._data[tool_call_id]
+            self._data.move_to_end(tool_call_id)
+            
+            logger.debug(f"[TOOLIFY] 找到工具调用映射: {tool_call_id} -> {result['name']}")
+            return result
+    
+    def cleanup_expired(self) -> int:
+        """清理过期条目，返回清理数量。"""
+        with self._lock:
+            current_time = time.time()
+            expired_keys = []
+            
+            for key, timestamp in self._timestamps.items():
+                if current_time - timestamp > self.ttl_seconds:
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                del self._data[key]
+                del self._timestamps[key]
+            
+            if expired_keys:
+                logger.debug(f"[TOOLIFY] 清理了 {len(expired_keys)} 个过期条目")
+            
+            return len(expired_keys)
+    
+    def _periodic_cleanup(self) -> None:
+        """后台周期性清理线程。"""
+        while True:
+            try:
+                time.sleep(self.cleanup_interval)
+                self.cleanup_expired()
+            except Exception as e:
+                logger.error(f"[TOOLIFY] 后台清理线程异常: {e}")
 
 
 class ToolifyCore:

@@ -74,6 +74,8 @@ class TestInjectToolPrompt:
     
     def test_inject_to_empty_messages(self):
         """测试注入到空消息列表。"""
+        from src.z2p_svc.services.toolify import get_toolify_core
+        
         messages = []
         tools = [{
             "function": {
@@ -88,7 +90,9 @@ class TestInjectToolPrompt:
         assert len(result) == 1
         assert result[0]["role"] == "system"
         assert "test_tool" in result[0]["content"]
-        assert TRIGGER_SIGNAL in result[0]["content"]
+        # 检查是否包含触发信号（动态生成的）
+        core = get_toolify_core()
+        assert core.trigger_signal in result[0]["content"] or "<Function_" in result[0]["content"]
     
     def test_inject_to_existing_system_message(self):
         """测试注入到已有 system 消息。"""

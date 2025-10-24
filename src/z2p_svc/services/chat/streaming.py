@@ -231,9 +231,10 @@ async def process_streaming_response(
                 # 初始化 toolify 检测器
                 detector = None
                 if enable_toolify:
-                    from ..toolify.detector import StreamingToolCallDetector
-                    detector = StreamingToolCallDetector()
-                    logger.info("[TOOLIFY] 流式检测器已启用")
+                    from ..toolify import StreamingToolCallDetector, get_toolify_core
+                    toolify_core = get_toolify_core()
+                    detector = StreamingToolCallDetector(toolify_core.trigger_signal)
+                    logger.info(f"[TOOLIFY] 流式检测器已启用，触发信号: {toolify_core.trigger_signal}")
 
                 async for line in response.aiter_lines():
                     if not line:
