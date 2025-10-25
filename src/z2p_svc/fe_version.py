@@ -32,7 +32,7 @@ async def _fetch_version_from_remote(browser_version: str) -> Optional[str]:
     """从远程获取版本号。"""
     settings = get_settings()
     try:
-        logger.debug("正在从远程获取FE版本号", url=settings.fe_version_source_url)
+        logger.debug("正在从远程获取FE版本号: {}", settings.fe_version_source_url)
         async with AsyncSession(impersonate=browser_version) as session:  # type: ignore
             response = await session.get(
                 settings.fe_version_source_url,
@@ -43,13 +43,13 @@ async def _fetch_version_from_remote(browser_version: str) -> Optional[str]:
             if response.status_code == 200:
                 version = _extract_version(response.text)
                 if version:
-                    logger.info("成功获取FE版本号", version=version)
+                    logger.info("成功获取FE版本号: {}", version)
                     return version
                 logger.error("无法在页面中找到FE版本号")
             else:
-                logger.error("获取FE版本号失败", status_code=response.status_code)
+                logger.error("获取FE版本号失败: status_code={}", response.status_code)
     except Exception as exc:
-        logger.error("获取FE版本号异常", error=str(exc))
+        logger.error("获取FE版本号异常: {}", str(exc))
     return None
 
 
@@ -60,7 +60,7 @@ async def update_fe_version(browser_version: str) -> Optional[str]:
     version = await _fetch_version_from_remote(browser_version)
     if version:
         if version != _cached_version:
-            logger.info("检测到FE版本更新", new_version=version, old_version=_cached_version or "无")
+            logger.info("检测到FE版本更新: {} -> {}", _cached_version or "无", version)
         _cached_version = version
         _cached_at = time.time()
         return version
@@ -79,16 +79,14 @@ async def _background_update_task(browser_version_func) -> None:
             logger.info("FE版本后台更新任务已取消")
             break
         except Exception as e:
-            logger.error("FE版本后台更新失败", error=str(e))
+            logger.error("FE版本后台更新失败: {}", str(e))
 
 
 def start_background_update(browser_version_func) -> None:
     """启动后台更新任务。"""
     global _update_task
-    settings = get_settings()
     if _update_task is None or _update_task.done():
         _update_task = asyncio.create_task(_background_update_task(browser_version_func))
-        logger.info("FE版本后台更新任务已启动", interval_seconds=settings.fe_version_update_interval)
 
 
 def stop_background_update() -> None:
@@ -114,7 +112,7 @@ async def initialize_fe_version(browser_version: str, fallback: str) -> str:
         _cached_at = time.time()
         return version
     
-    logger.warning("无法获取FE版本号，使用降级值", fallback=fallback)
+    logger.warning("无法获取FE版本号，使用降级值: {}", fallback)
     _cached_version = fallback
     _cached_at = time.time()
     return fallback
