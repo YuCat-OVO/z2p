@@ -212,6 +212,12 @@ class AppConfig(BaseSettings):
         default="random",
         description="curl_cffi 浏览器模拟类型 (random/chrome136/chrome133a/chrome131/safari260/safari184/firefox133等)"
     )
+
+    # Toolify 功能开关
+    enable_toolify: bool = Field(
+        default=True,
+        description="是否启用Toolify工具调用功能"
+    )
     
     # 支持的较新浏览器版本列表
     _BROWSER_VERSIONS = [

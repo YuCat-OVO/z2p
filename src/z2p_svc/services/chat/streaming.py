@@ -266,14 +266,28 @@ async def process_streaming_response(
                     data = json_object.get("data", {})
 
                     # 检查是否有错误（如内容安全警告）
-                    if data.get("error") or data.get("done"):
-                        error_info = data.get("error", {})
-                        if error_info:
-                            logger.warning(
-                                "Content security warning: request_id={}, detail={}",
-                                request_id,
-                                error_info.get("detail", "Unknown error")
-                            )
+                    error_info = data.get("error")
+                    if error_info:
+                        error_detail = error_info.get("detail", "Unknown error")
+                        logger.warning(
+                            "Content security warning: request_id={}, detail={}",
+                            request_id,
+                            error_detail
+                        )
+                        # 返回错误信息给下游
+                        error_chunk = {
+                            "id": chunk_id,
+                            "object": "chat.completion.chunk",
+                            "created": timestamp,
+                            "model": chat_request.model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"content": f"\n\n[Error: {error_detail}]"},
+                                "finish_reason": "content_filter"
+                            }]
+                        }
+                        yield f"data: {json_dumps(error_chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
                         break
 
                     phase = data.get("phase")
@@ -294,9 +308,7 @@ async def process_streaming_response(
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'thinking', chunk_id))}\n\n"
 
                     elif phase == "answer":
-                        content = data.get("delta_content") or data.get(
-                            "edit_content", ""
-                        )
+                        content = data.get("delta_content") or data.get("edit_content", "")
                         # 使用预编译正则快速清理
                         if "</details>" in content:
                             content = DETAILS_PATTERN.split(content)[-1]
@@ -326,9 +338,7 @@ async def process_streaming_response(
                             yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
 
                     elif phase == "tool_call":
-                        content = data.get("delta_content") or data.get(
-                            "edit_content", ""
-                        )
+                        content = data.get("delta_content") or data.get("edit_content", "")
                         # 使用预编译正则快速清理
                         content = GLM_BLOCK_START_PATTERN.sub("{", content)
                         content = GLM_BLOCK_END_PATTERN.sub("", content)
@@ -344,7 +354,7 @@ async def process_streaming_response(
 
                     elif phase == "other":
                         usage = data.get("usage", {})
-                        content = data.get("delta_content", "")
+                        content = data.get("delta_content") or data.get("edit_content", "")
                         logger.info(
                             "Streaming completion: request_id={}, model={}, total_chunks={}, usage={}",
                             request_id,
@@ -358,7 +368,8 @@ async def process_streaming_response(
                                 request_id,
                                 content[:200],
                             )
-                        yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', chunk_id, usage, 'stop'))}\n\n"
+                        if content or usage:
+                            yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', chunk_id, usage, 'stop'))}\n\n"
 
                     elif phase == "done":
                         # 如果启用了 toolify，finalize 检测器

@@ -159,41 +159,37 @@ async def process_non_streaming_response(
                     data = json_object.get("data", {})
 
                     # 检查是否有错误（如内容安全警告）
-                    if data.get("error") or data.get("done"):
-                        error_info = data.get("error", {})
-                        if error_info:
-                            logger.warning(
-                                "Content security warning: request_id={}, detail={}",
-                                request_id,
-                                error_info.get("detail", "Unknown error")
-                            )
+                    error_info = data.get("error")
+                    if error_info:
+                        error_detail = error_info.get("detail", "Unknown error")
+                        logger.warning(
+                            "Content security warning: request_id={}, detail={}",
+                            request_id,
+                            error_detail
+                        )
+                        # 将错误信息添加到响应中
+                        full_response += f"\n\n[Error: {error_detail}]"
                         break
 
                     # 提取usage信息（可能在任何阶段出现）
                     if data.get("usage"):
                         usage_info = data["usage"]
 
-                    # 聚合answer内容
+                    # 聚合answer和other阶段的内容
                     phase = data.get("phase")
-                    if phase == "answer":
-                        delta_content = data.get("delta_content", "")
-                        if delta_content:
-                            full_response += delta_content
-                    
-                    # 检查done标记和提取最终内容
-                    elif phase == "other":
-                        # done=true时可能包含最终的delta_content
-                        if data.get("done"):
-                            delta_content = data.get("delta_content", "")
-                            if delta_content:
-                                full_response += delta_content
-                            
-                            logger.info(
-                                "Non-streaming done signal received: request_id={}, model={}",
-                                request_id,
-                                chat_request.model,
-                            )
-                            break
+                    if phase in ("answer", "other"):
+                        content = data.get("delta_content") or data.get("edit_content", "")
+                        if content:
+                            full_response += content
+
+                    # 检查done标记
+                    if phase == "done":
+                        logger.info(
+                            "Non-streaming done signal received: request_id={}, model={}",
+                            request_id,
+                            chat_request.model,
+                        )
+                        break
 
             finally:
                 await response.aclose()

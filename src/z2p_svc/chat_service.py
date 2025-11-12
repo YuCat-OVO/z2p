@@ -196,8 +196,12 @@ async def prepare_request_data(
     converted = convert_messages(chat_request.messages)
     
     # 检查是否需要启用 toolify
-    enable_toolify = chat_request.tools is not None and len(chat_request.tools) > 0
-    
+    enable_toolify = (
+        settings.enable_toolify and
+        chat_request.tools is not None and
+        len(chat_request.tools) > 0
+    )
+
     if enable_toolify and chat_request.tools:
         # 注入工具提示词
         from .services.toolify.prompt import inject_tool_prompt
@@ -272,14 +276,15 @@ async def prepare_request_data(
     
     # 上游始终使用stream=True返回SSE流
     # 非流式请求通过聚合SSE流来实现"伪非流式"
+    current_message_id = generate_uuid_str()
     zai_data = UpstreamRequestData(
         stream=True,
         model=upstream_model_id,
         messages=converted_messages,
         signature_prompt=converted.last_user_message_text,
         variables={
-            "{{USER_LOCATION}}": "Unknown",  # 添加用户位置变量（默认值）
-            "{{CURRENT_DATETIME}}": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # 匹配上游格式
+            "{{USER_LOCATION}}": "Unknown",
+            "{{CURRENT_DATETIME}}": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "{{CURRENT_DATE}}": datetime.now().strftime("%Y-%m-%d"),
             "{{CURRENT_TIME}}": datetime.now().strftime("%H:%M:%S"),
             "{{CURRENT_WEEKDAY}}": datetime.now().strftime("%A"),
@@ -288,6 +293,8 @@ async def prepare_request_data(
         },
         chat_id=chat_id,
         id=generate_uuid_str(),
+        current_user_message_id=current_message_id,
+        current_user_message_parent_id=None,
     )
 
     # 查找匹配的下游模型（用于 model_item）
@@ -675,7 +682,11 @@ def process_streaming_response(
        响应格式遵循OpenAI的流式API规范。
     """
     # 检查是否启用 toolify
-    enable_toolify = chat_request.tools is not None and len(chat_request.tools) > 0
+    enable_toolify = (
+        settings.enable_toolify and
+        chat_request.tools is not None and
+        len(chat_request.tools) > 0
+    )
     return _process_streaming_response(chat_request, access_token, prepare_request_data, enable_toolify)
 
 

@@ -563,6 +563,8 @@ class UpstreamRequestData(BaseModel):
     )
     chat_id: str = Field(..., description="会话 ID（UUID）")
     id: str = Field(..., description="请求 ID（UUID）")
+    current_user_message_id: Optional[str] = Field(default=None, description="当前用户消息 ID")
+    current_user_message_parent_id: Optional[str] = Field(default=None, description="当前用户消息父 ID")
 
 
 class ConvertedMessages(BaseModel):
