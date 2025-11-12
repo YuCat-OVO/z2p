@@ -157,11 +157,22 @@ async def process_non_streaming_response(
                         continue
 
                     data = json_object.get("data", {})
-                    
+
+                    # 检查是否有错误（如内容安全警告）
+                    if data.get("error") or data.get("done"):
+                        error_info = data.get("error", {})
+                        if error_info:
+                            logger.warning(
+                                "Content security warning: request_id={}, detail={}",
+                                request_id,
+                                error_info.get("detail", "Unknown error")
+                            )
+                        break
+
                     # 提取usage信息（可能在任何阶段出现）
                     if data.get("usage"):
                         usage_info = data["usage"]
-                    
+
                     # 聚合answer内容
                     phase = data.get("phase")
                     if phase == "answer":

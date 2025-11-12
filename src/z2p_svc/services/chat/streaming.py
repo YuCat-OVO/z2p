@@ -264,6 +264,18 @@ async def process_streaming_response(
                         continue
 
                     data = json_object.get("data", {})
+
+                    # 检查是否有错误（如内容安全警告）
+                    if data.get("error") or data.get("done"):
+                        error_info = data.get("error", {})
+                        if error_info:
+                            logger.warning(
+                                "Content security warning: request_id={}, detail={}",
+                                request_id,
+                                error_info.get("detail", "Unknown error")
+                            )
+                        break
+
                     phase = data.get("phase")
 
                     if phase == "thinking":
