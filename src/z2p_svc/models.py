@@ -475,11 +475,11 @@ class UploadedFileObject(BaseModel):
 
 class UpstreamRequestParams(BaseModel):
     """上游 API 请求参数。
-    
+
     包含发送到上游 API 的查询参数，用于请求签名和追踪。
     """
     model_config = {"extra": "allow"}  # 允许额外字段
-    
+
     requestId: str = Field(..., description="请求唯一标识符（UUID）")
     timestamp: str = Field(..., description="请求时间戳（毫秒）")
     user_id: str = Field(..., description="用户 ID（UUID）")
@@ -491,6 +491,32 @@ class UpstreamRequestParams(BaseModel):
     languages: str = Field(default="zh-CN", description="接受的语言列表")
     timezone: str = Field(default="Asia/Shanghai", description="时区")
     signature_timestamp: Optional[str] = Field(default=None, description="签名时间戳")
+    cookie_enabled: bool = Field(default=True, description="是否启用Cookie")
+    screen_width: int = Field(default=1920, description="屏幕宽度")
+    screen_height: int = Field(default=1080, description="屏幕高度")
+    screen_resolution: str = Field(default="1920x1080", description="屏幕分辨率")
+    viewport_width: int = Field(default=1920, description="视口宽度")
+    viewport_height: int = Field(default=1080, description="视口高度")
+    viewport_size: str = Field(default="1920x1080", description="视口尺寸")
+    color_depth: int = Field(default=24, description="颜色深度")
+    pixel_ratio: float = Field(default=1.0, description="像素比率")
+    current_url: str = Field(default="", description="当前URL")
+    pathname: str = Field(default="/", description="路径名")
+    search: str = Field(default="", description="查询字符串")
+    hash: str = Field(default="", description="URL哈希")
+    host: str = Field(default="chat.z.ai", description="主机名")
+    hostname: str = Field(default="chat.z.ai", description="主机名")
+    protocol: str = Field(default="https:", description="协议")
+    referrer: str = Field(default="", description="来源页面")
+    title: str = Field(default="Z.ai Chat", description="页面标题")
+    timezone_offset: int = Field(default=-480, description="时区偏移（分钟）")
+    local_time: str = Field(default="", description="本地时间")
+    utc_time: str = Field(default="", description="UTC时间")
+    is_mobile: bool = Field(default=False, description="是否移动设备")
+    is_touch: bool = Field(default=False, description="是否触摸设备")
+    max_touch_points: int = Field(default=0, description="最大触摸点数")
+    browser_name: str = Field(default="Chrome", description="浏览器名称")
+    os_name: str = Field(default="Windows", description="操作系统名称")
 
 
 class ModelFeatures(BaseModel):
@@ -500,7 +526,7 @@ class ModelFeatures(BaseModel):
     """
     web_search: bool = Field(default=False, description="是否启用网络搜索")
     auto_web_search: bool = Field(default=False, description="是否自动触发网络搜索")
-    preview_mode: bool = Field(default=False, description="是否启用预览模式")
+    preview_mode: bool = Field(default=True, description="是否启用预览模式")
     flags: List[str] = Field(default_factory=list, description="功能标志列表")
     enable_thinking: bool = Field(default=True, description="是否启用深度思考（思维链）")
 

@@ -614,15 +614,21 @@ async def prepare_request_data(
     zai_data.features = features_obj
 
     # 使用 Pydantic 模型构造查询参数
+    current_timestamp = int(time.time() * 1000)
+    current_datetime = datetime.now()
     params = UpstreamRequestParams(
         requestId=generate_request_id(),
-        timestamp=str(int(time.time() * 1000)),
+        timestamp=str(current_timestamp),
         user_id=user_id,
         token=auth_token,
         version=settings.HEADERS["X-FE-Version"],
         user_agent=user_agent,  # 从调用方传入的User-Agent（来自curl_cffi session）
         language=user_language,
         languages=chat_request.accept_language or "zh-CN",
+        current_url=f"{settings.protocol}//{settings.base_url}/c/{chat_id}",
+        pathname=f"/c/{chat_id}",
+        local_time=current_datetime.isoformat() + "Z",
+        utc_time=current_datetime.strftime("%a, %d %b %Y %H:%M:%S GMT"),
     )
 
     request_params = f"requestId,{params.requestId},timestamp,{params.timestamp},user_id,{params.user_id}"

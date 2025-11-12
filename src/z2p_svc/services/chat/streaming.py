@@ -236,6 +236,12 @@ async def process_streaming_response(
                     detector = StreamingToolCallDetector(toolify_core.trigger_signal)
                     logger.info(f"[TOOLIFY] 流式检测器已启用，触发信号: {toolify_core.trigger_signal}")
 
+                # verbose logging 合并状态
+                last_phase = None
+                phase_chunk_count = 0
+                phase_content_buffer = ""
+                PHASE_LOG_INTERVAL = 32
+
                 async for line in response.aiter_lines():
                     if not line:
                         continue
@@ -248,14 +254,6 @@ async def process_streaming_response(
                         continue
 
                     json_str = line[6:]
-
-                    # 输出原始SSE数据块
-                    if settings.verbose_logging:
-                        logger.debug(
-                            "Streaming SSE line: request_id={}, data={}",
-                            request_id,
-                            json_str[:300],
-                        )
 
                     try:
                         json_object = json_loads(json_str)
@@ -292,19 +290,36 @@ async def process_streaming_response(
 
                     phase = data.get("phase")
 
+                    # verbose logging 合并逻辑
+                    if settings.verbose_logging and phase:
+                        if phase != last_phase and last_phase:
+                            logger.debug(
+                                "Phase completed: phase={}, chunks={}, content_preview={}",
+                                last_phase,
+                                phase_chunk_count,
+                                phase_content_buffer[:200]
+                            )
+                            phase_chunk_count = 0
+                            phase_content_buffer = ""
+                        last_phase = phase
+
+                        # 达到间隔次数时输出中间统计
+                        if phase_chunk_count > 0 and phase_chunk_count % PHASE_LOG_INTERVAL == 0:
+                            logger.debug(
+                                "Phase progress: phase={}, chunks={}, content_preview={}",
+                                phase,
+                                phase_chunk_count,
+                                phase_content_buffer[:200]
+                            )
+
                     if phase == "thinking":
                         content = data.get("delta_content", "")
-                        # 使用预编译正则快速清理
                         if "</summary>\n" in content:
                             content = SUMMARY_PATTERN.split(content)[-1]
                         chunk_count += 1
                         if settings.verbose_logging:
-                            logger.debug(
-                                "Streaming thinking chunk: request_id={}, chunks={}, content={}",
-                                request_id,
-                                chunk_count,
-                                content[:200],
-                            )
+                            phase_chunk_count += 1
+                            phase_content_buffer += content
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'thinking', chunk_id))}\n\n"
 
                     elif phase == "answer":
@@ -319,37 +334,24 @@ async def process_streaming_response(
                             if output_content:
                                 chunk_count += 1
                                 if settings.verbose_logging:
-                                    logger.debug(
-                                        "Streaming answer chunk (toolify): request_id={}, chunks={}, content={}",
-                                        request_id,
-                                        chunk_count,
-                                        output_content[:200],
-                                    )
+                                    phase_chunk_count += 1
+                                    phase_content_buffer += output_content
                                 yield f"data: {json_dumps(create_chat_completion_chunk(output_content, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
                         else:
                             chunk_count += 1
                             if settings.verbose_logging:
-                                logger.debug(
-                                    "Streaming answer chunk: request_id={}, chunks={}, content={}",
-                                    request_id,
-                                    chunk_count,
-                                    content[:200],
-                                )
+                                phase_chunk_count += 1
+                                phase_content_buffer += content
                             yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'answer', chunk_id))}\n\n"
 
                     elif phase == "tool_call":
                         content = data.get("delta_content") or data.get("edit_content", "")
-                        # 使用预编译正则快速清理
                         content = GLM_BLOCK_START_PATTERN.sub("{", content)
                         content = GLM_BLOCK_END_PATTERN.sub("", content)
                         chunk_count += 1
                         if settings.verbose_logging:
-                            logger.debug(
-                                "Streaming tool_call chunk: request_id={}, chunks={}, content={}",
-                                request_id,
-                                chunk_count,
-                                content[:200],
-                            )
+                            phase_chunk_count += 1
+                            phase_content_buffer += content
                         yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'tool_call', chunk_id))}\n\n"
 
                     elif phase == "other":
@@ -363,11 +365,8 @@ async def process_streaming_response(
                             log_json(usage),
                         )
                         if settings.verbose_logging and content:
-                            logger.debug(
-                                "Streaming other chunk: request_id={}, content={}",
-                                request_id,
-                                content[:200],
-                            )
+                            phase_chunk_count += 1
+                            phase_content_buffer += content
                         if content or usage:
                             yield f"data: {json_dumps(create_chat_completion_chunk(content, chat_request.model, timestamp, 'other', chunk_id, usage, 'stop'))}\n\n"
 
@@ -398,6 +397,15 @@ async def process_streaming_response(
                                 yield f"data: {json_dumps(tool_chunk)}\n\n"
                                 logger.info(f"[TOOLIFY] 发送了 {len(tool_calls)} 个工具调用")
                         
+                        # 输出最后一个 phase 的统计信息
+                        if settings.verbose_logging and last_phase and phase_chunk_count > 0:
+                            logger.debug(
+                                "Phase completed: phase={}, chunks={}, content_preview={}",
+                                last_phase,
+                                phase_chunk_count,
+                                phase_content_buffer[:200]
+                            )
+
                         logger.info(
                             "Streaming finished: request_id={}, model={}, total_chunks={}",
                             request_id,
